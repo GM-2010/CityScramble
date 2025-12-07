@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Scramble</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-layer">
+            <!-- HUD -->
+            <div id="hud" class="hidden">
+                <div id="timer">03:00</div>
+                <div id="score-panel">
+                    <div class="score-box player">P1: <span id="p1-score">0</span></div>
+                    <div class="score-box enemy">CPU: <span id="cpu-score">0</span></div>
+                </div>
+                <div id="player-stats">
+                    <div class="bar-container">
+                        <div id="hp-bar" class="bar"></div>
+                    </div>
+                    <div id="ammo-display">Unendlich</div>
+                    <div id="ability-icon" class="cooldown-ready">Q</div>
+                </div>
+            </div>
+
+            <!-- Start Screen -->
+            <div id="start-screen" class="screen">
+                <h1>City Scramble</h1>
+                <p>Beweise, wer der wahre Beherrscher der Straße ist!</p>
+                <div id="total-score-display">
+                    <p class="total-score-label">Gesamtpunkte:</p>
+                    <p class="total-score-value" id="total-score">0</p>
+                </div>
+                <div id="enemy-count-selector">
+                    <label for="enemy-count">Anzahl Gegner:</label>
+                    <button id="enemy-count-dec">-</button>
+                    <span id="enemy-count-value">1</span>
+                    <button id="enemy-count-inc">+</button>
+                </div>
+                <button id="start-btn">Kampf beginnen</button>
+            </div>
+
+            <!-- Game Over Screen -->
+            <div id="game-over-screen" class="screen hidden">
+                <h1>Zeit abgelaufen!</h1>
+                <h2 id="winner-text"></h2>
+                <p>Dein Schaden: <span id="final-p1-score"></span></p>
+                <p>Gegner Schaden: <span id="final-cpu-score"></span></p>
+                <p class="returning-message">Kehre zum Startbildschirm zurück...</p>
+            </div>
+
+            <!-- Shop Screen -->
+            <div id="shop-screen" class="screen hidden">
+                <h1>Waffen-Shop</h1>
+                <p>Verbessere eine zufällige Waffe mit einem zufälligen Upgrade!</p>
+                <div id="shop-info">
+                    <p>Deine Punkte: <span id="shop-score">0</span></p>
+                    <p>Upgrade-Kosten: <span class="highlight">2000 Punkte</span></p>
+                </div>
+                <button id="shop-upgrade-btn">Upgrade kaufen</button>
+                <button id="shop-close-btn">Schließen (E)</button>
+                <div id="shop-message"></div>
+            </div>
+        </div>
+    </div>
+    <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,247 @@
+    def show_multiplayer_menu(self):
+        """Multiplayer host/join selection menu"""
+        # Import network module
+        from network import ensure_server, GameClient
+        
+        # Ensure server is running
+        ensure_server()
+        
+        # Define buttons
+        button_width = 300
+        button_height = 70
+        button_spacing = 30
+        
+        buttons_x = SCREEN_WIDTH // 2 - button_width // 2
+        buttons_y = SCREEN_HEIGHT // 2 - 50
+        
+        host_button = pygame.Rect(buttons_x, buttons_y, button_width, button_height)
+        join_button = pygame.Rect(buttons_x, buttons_y + button_height + button_spacing, button_width, button_height)
+        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT - 100, 240, 60)
+        
+        while True:
+            self.screen.fill(DARK_GREY)
+            
+            # Title
+            title_text = self.large_font.render("MULTIPLAYER", True, (255, 100, 255))
+            self.screen.blit(title_text, (SCREEN_WIDTH // 2 - 130, 100))
+            
+            # Host button
+            pygame.draw.rect(self.screen, (100, 255, 100), host_button)
+            pygame.draw.rect(self.screen, WHITE, host_button, 3)
+            host_text = self.large_font.render("SPIEL HOSTEN", True, WHITE)
+            host_rect = host_text.get_rect(center=host_button.center)
+            self.screen.blit(host_text, host_rect)
+            
+            # Join button
+            pygame.draw.rect(self.screen, (255, 200, 100), join_button)
+            pygame.draw.rect(self.screen, WHITE, join_button, 3)
+            join_text = self.large_font.render("SPIEL BEITRETEN", True, WHITE)
+            join_rect = join_text.get_rect(center=join_button.center)
+            self.screen.blit(join_text, join_rect)
+            
+            # Back button
+            pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
+            pygame.draw.rect(self.screen, WHITE, back_button, 3)
+            back_text = self.large_font.render("ZURÜCK", True, WHITE)
+            back_rect = back_text.get_rect(center=back_button.center)
+            self.screen.blit(back_text, back_rect)
+            
+            pygame.display.flip()
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if back_button.collidepoint(event.pos):
+                        return
+                    elif host_button.collidepoint(event.pos):
+                        self.multiplayer_host()
+                    elif join_button.collidepoint(event.pos):
+                        self.multiplayer_join()
+    
+    def multiplayer_host(self):
+        """Host multiplayer game"""
+        from network import GameClient
+        
+        client = GameClient()
+        if not client.connect():
+            self.show_message_box("Fehler", "Server nicht erreichbar!")
+            return
+        
+        room_code = client.create_room()
+        if not room_code:
+            self.show_message_box("Fehler", "Raum konnte nicht erstellt werden!")
+            client.close()
+            return
+        
+        # Show room code and wait for player
+        waiting = True
+        other_joined = False
+        
+        while waiting:
+            self.screen.fill(DARK_GREY)
+            
+            # Title
+            title = self.large_font.render("WARTE AUF GEGNER...", True, WHITE)
+            title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 150))
+            self.screen.blit(title, title_rect)
+            
+            # Room code (large)
+            code_text = pygame.font.SysFont("Arial", 72, bold=True).render(room_code, True, (255, 255, 100))
+            code_rect = code_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+            pygame.draw.rect(self.screen, (50, 50, 50), (code_rect.x - 20, code_rect.y - 20, code_rect.width + 40, code_rect.height + 40))
+            pygame.draw.rect(self.screen, (255, 255, 100), (code_rect.x - 20, code_rect.y - 20, code_rect.width + 40, code_rect.height + 40), 3)
+            self.screen.blit(code_text, code_rect)
+            
+            # Instructions
+            instr = self.font.render("Gib diesen Code an deinen Gegner weiter!", True, WHITE)
+            instr_rect = instr.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 80))
+            self.screen.blit(instr, instr_rect)
+            
+            # Cancel button
+            cancel_btn = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 100, 200, 50)
+            pygame.draw.rect(self.screen, (200, 50, 50), cancel_btn)
+            pygame.draw.rect(self.screen, WHITE, cancel_btn, 2)
+            cancel_text = self.font.render("Abbrechen", True, WHITE)
+            cancel_text_rect = cancel_text.get_rect(center=cancel_btn.center)
+            self.screen.blit(cancel_text, cancel_text_rect)
+            
+            pygame.display.flip()
+            
+            # Check for messages
+            for msg in client.get_messages():
+                if msg.get('type') == 'ready':
+                    other_joined = True
+                    waiting = False
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    client.close()
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if cancel_btn.collidepoint(event.pos):
+                        client.close()
+                        return
+        
+        if other_joined:
+            self.start_multiplayer_game(client, is_host=True)
+    
+    def multiplayer_join(self):
+        """Join multiplayer game via room code"""
+        from network import GameClient
+        
+        # Input room code
+        room_code = self.get_text_input("RAUM-CODE EINGEBEN")
+        if not room_code:
+            return
+        
+        room_code = room_code.upper()
+        
+        client = GameClient()
+        if not client.connect():
+            self.show_message_box("Fehler", "Server nicht erreichbar!")
+            return
+        
+        if client.join_room(room_code):
+            self.start_multiplayer_game(client, is_host=False)
+        else:
+            self.show_message_box("Fehler", f"Raum '{room_code}' nicht gefunden!")
+            client.close()
+    
+    def get_text_input(self, prompt):
+        """Simple text input dialog"""
+        text = ""
+        done = False
+        
+        while not done:
+            self.screen.fill(DARK_GREY)
+            
+            # Prompt
+            prompt_surf = self.large_font.render(prompt, True, WHITE)
+            prompt_rect = prompt_surf.get_rect(center=(SCREEN_WIDTH // 2, 200))
+            self.screen.blit(prompt_surf, prompt_rect)
+            
+            # Input box
+            input_box = pygame.Rect(SCREEN_WIDTH // 2 - 150, SCREEN_HEIGHT // 2 - 30, 300, 60)
+            pygame.draw.rect(self.screen, (50, 50, 50), input_box)
+            pygame.draw.rect(self.screen, WHITE, input_box, 3)
+            
+            # Text
+            text_surf = pygame.font.SysFont("Arial", 48).render(text, True, (255, 255, 100))
+            text_rect = text_surf.get_rect(center=input_box.center)
+            self.screen.blit(text_surf, text_rect)
+            
+            # Buttons
+            ok_btn = pygame.Rect(SCREEN_WIDTH // 2 - 110, SCREEN_HEIGHT - 150, 100, 50)
+            cancel_btn = pygame.Rect(SCREEN_WIDTH // 2 + 10, SCREEN_HEIGHT - 150, 100, 50)
+            
+            pygame.draw.rect(self.screen, (100, 200, 100), ok_btn)
+            pygame.draw.rect(self.screen, WHITE, ok_btn, 2)
+            ok_text = self.font.render("OK", True, WHITE)
+            self.screen.blit(ok_text, (ok_btn.centerx - 15, ok_btn.centery - 10))
+            
+            pygame.draw.rect(self.screen, (200, 100, 100), cancel_btn)
+            pygame.draw.rect(self.screen, WHITE, cancel_btn, 2)
+            cancel_text = self.font.render("Abbruch", True, WHITE)
+            self.screen.blit(cancel_text, (cancel_btn.centerx - 30, cancel_btn.centery - 10))
+            
+            pygame.display.flip()
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return None
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN:
+                        done = True
+                    elif event.key == pygame.K_ESCAPE:
+                        return None
+                    elif event.key == pygame.K_BACKSPACE:
+                        text = text[:-1]
+                    elif len(text) < 6 and event.unicode.isalnum():
+                        text += event.unicode.upper()
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if ok_btn.collidepoint(event.pos):
+                        done = True
+                    elif cancel_btn.collidepoint(event.pos):
+                        return None
+        
+        return text if text else None
+    
+    def show_message_box(self, title, message):
+        """Simple message box"""
+        waiting = True
+        while waiting:
+            self.screen.fill(DARK_GREY)
+            
+            # Title
+            title_surf = self.large_font.render(title, True, (255, 100, 100))
+            title_rect = title_surf.get_rect(center=(SCREEN_WIDTH // 2, 200))
+            self.screen.blit(title_surf, title_rect)
+            
+            # Message
+            msg_surf = self.font.render(message, True, WHITE)
+            msg_rect = msg_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+            self.screen.blit(msg_surf, msg_rect)
+            
+            # OK button
+            ok_btn = pygame.Rect(SCREEN_WIDTH // 2 - 75, SCREEN_HEIGHT - 150, 150, 50)
+            pygame.draw.rect(self.screen, (100, 200, 100), ok_btn)
+            pygame.draw.rect(self.screen, WHITE, ok_btn, 2)
+            ok_text = self.font.render("OK", True, WHITE)
+            ok_rect = ok_text.get_rect(center=ok_btn.center)
+            self.screen.blit(ok_text, ok_rect)
+            
+            pygame.display.flip()
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    sys.exit()
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if ok_btn.collidepoint(event.pos):
+                        waiting = False
+                if event.type == pygame.KEYDOWN:
+                    if event.key in [pygame.K_RETURN, pygame.K_ESCAPE]:
+                        waiting = False
