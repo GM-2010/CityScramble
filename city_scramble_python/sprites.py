@@ -186,6 +186,12 @@ class Obstacle(pygame.sprite.Sprite):
             # Schedule respawn
             self.game.schedule_obstacle_respawn(self.original_x, self.original_y, 
                                                 self.original_w, self.original_h)
+            
+            # Network Sync: Tell other player to destroy this wall
+            client = getattr(self.game, 'network_client', None)
+            if client and client.connected:
+                client.send({'type': 'destroy_wall', 'x': self.original_x, 'y': self.original_y})
+            
             self.kill()
 
 class Projectile(pygame.sprite.Sprite):
@@ -359,8 +365,283 @@ class Enemy(pygame.sprite.Sprite):
         self.hp = 50
         self.last_shot = 0
         self.weapon = 'pistol' # Enemies use pistol for now
+        self.player_last_pos = None  # Track player position for velocity calculation
+        self.player_last_time = 0
+        
+        # Dodge state tracking
+        self.dodge_start_time = 0
+        self.dodge_direction = None
+        self.dodge_duration = 400  # milliseconds to dodge (increased for bigger movements)
 
+    def has_line_of_sight(self, target_pos):
+        """Check if there's a clear line of sight to target position (no walls blocking)"""
+        # Simple raycast - check points along the line between enemy and target
+        start = vec(self.rect.centerx, self.rect.centery)
+        end = vec(target_pos[0], target_pos[1])
+        
+        direction = end - start
+        distance = direction.length()
+        
+        if distance == 0:
+            return True
+        
+        direction = direction.normalize()
+        
+        # Check points every 20 pixels along the line
+        steps = int(distance / 20) + 1
+        for i in range(1, steps):
+            check_pos = start + direction * (i * 20)
+            check_rect = pygame.Rect(check_pos.x - 5, check_pos.y - 5, 10, 10)
+            
+            # Check if this point intersects any wall
+            for wall in self.game.walls:
+                if wall.rect.colliderect(check_rect):
+                    return False
+        
+        return True
+    
+    def calculate_predicted_target(self):
+        """Calculate where to aim based on player movement and projectile speed"""
+        player = self.game.player
+        
+        # Get difficulty setting
+        difficulty = self.game.ai_aim_difficulty
+        
+        # Easy mode: No prediction, just aim at current position with high inaccuracy
+        if difficulty == 'easy':
+            # High inaccuracy for easy mode
+            max_inaccuracy = 100
+            offset_x = random.uniform(-max_inaccuracy, max_inaccuracy)
+            offset_y = random.uniform(-max_inaccuracy, max_inaccuracy)
+            
+            predicted_pos = player.pos.copy()
+            predicted_pos.x += offset_x
+            predicted_pos.y += offset_y
+            
+            # Clamp to map bounds
+            predicted_pos.x = max(0, min(MAP_WIDTH, predicted_pos.x))
+            predicted_pos.y = max(0, min(MAP_HEIGHT, predicted_pos.y))
+            
+            return (predicted_pos.x, predicted_pos.y)
+        
+        # Normal and Hard modes: Use predictive aiming
+        # Calculate player velocity
+        now = pygame.time.get_ticks()
+        player_vel = vec(0, 0)
+        
+        if self.player_last_pos is not None and (now - self.player_last_time) > 0:
+            time_delta = (now - self.player_last_time) / 1000.0  # Convert to seconds
+            player_vel = (player.pos - self.player_last_pos) / time_delta
+        
+        # Update tracking
+        self.player_last_pos = player.pos.copy()
+        self.player_last_time = now
+        
+        # Get projectile speed
+        weapon_stats = WEAPONS[self.weapon]
+        projectile_speed = weapon_stats['speed']
+        
+        # Calculate distance to player
+        to_player = player.pos - self.pos
+        distance = to_player.length()
+        
+        if distance == 0 or projectile_speed == 0:
+            return (player.rect.centerx, player.rect.centery)
+        
+        # Calculate time for projectile to reach player
+        travel_time = distance / projectile_speed
+        
+        # Predict player position
+        predicted_pos = player.pos + player_vel * travel_time
+        
+        # Add distance-based accuracy variation
+        # Difficulty affects max inaccuracy
+        max_distance = 1000
+        if difficulty == 'hardcore':
+            # Hardcore mode: Perfect accuracy (0 pixel inaccuracy)
+            max_inaccuracy = 0
+        elif difficulty == 'hard':
+            # Hard mode: More accurate (±25 pixels max)
+            max_inaccuracy = min(25, (distance / max_distance) * 25)
+        else:  # normal
+            # Normal mode: Standard accuracy (±50 pixels max)
+            max_inaccuracy = min(50, (distance / max_distance) * 50)
+        
+        offset_x = random.uniform(-max_inaccuracy, max_inaccuracy)
+        offset_y = random.uniform(-max_inaccuracy, max_inaccuracy)
+        
+        predicted_pos.x += offset_x
+        predicted_pos.y += offset_y
+        
+        # Clamp to map bounds
+        predicted_pos.x = max(0, min(MAP_WIDTH, predicted_pos.x))
+        predicted_pos.y = max(0, min(MAP_HEIGHT, predicted_pos.y))
+        
+        return (predicted_pos.x, predicted_pos.y)
+    
+    def detect_incoming_projectiles(self):
+        """Detect player projectiles that might hit this enemy"""
+        dangerous_projectiles = []
+        detection_range = 300  # Increased from 150 for earlier dodging
+        
+        for projectile in self.game.projectiles:
+            # Skip if projectile doesn't have owner (e.g., BuildingProjectile)
+            if not hasattr(projectile, 'owner'):
+                continue
+            
+            # Only care about player projectiles
+            if projectile.owner != 'player':
+                continue
+            
+            # Check if projectile is close enough to worry about
+            to_projectile = vec(projectile.rect.centerx, projectile.rect.centery) - self.pos
+            distance = to_projectile.length()
+            
+            if distance > detection_range:
+                continue
+            
+            # Check if projectile is moving towards us
+            # Get projectile velocity direction
+            if hasattr(projectile, 'vel') and projectile.vel.length() > 0:
+                projectile_dir = projectile.vel.normalize()
+                
+                # Vector from projectile to enemy
+                if to_projectile.length() > 0:
+                    to_enemy_dir = to_projectile.normalize()
+                    
+                    # If projectile is moving towards us (dot product > 0.5 means roughly same direction)
+                    dot_product = projectile_dir.dot(to_enemy_dir)
+                    if dot_product > 0.5:  # Moving towards us
+                        dangerous_projectiles.append((projectile, distance))
+            
+        # Return list of dangerous projectiles
+        if dangerous_projectiles:
+            # Sort by distance (closest first)
+            dangerous_projectiles.sort(key=lambda x: x[1])
+            return dangerous_projectiles
+        
+        return []
+    
+    def calculate_dodge_direction(self, incoming_projectiles):
+        """Calculate a safe direction to dodge away from projectiles"""
+        if not incoming_projectiles:
+            return None
+            
+        # Sort by distance to prioritize closest threat
+        incoming_projectiles.sort(key=lambda x: x[1])
+        primary_projectile_info = incoming_projectiles[0]
+        primary_projectile = primary_projectile_info[0]
+        
+        if not hasattr(primary_projectile, 'vel') or primary_projectile.vel.length() == 0:
+            return None
+        
+        # Get perpendicular direction to primary projectile velocity
+        projectile_vel = primary_projectile.vel
+        if projectile_vel.length() == 0:
+            return None
+            
+        projectile_dir = projectile_vel.normalize()
+        
+        # Two perpendicular directions (left and right of projectile path)
+        perpendicular1 = vec(-projectile_dir.y, projectile_dir.x)
+        perpendicular2 = vec(projectile_dir.y, -projectile_dir.x)
+        
+        # Choose direction that doesn't lead into a wall AND avoids other projectiles
+        dodge_distance = 60  # How far to dodge
+        
+        test_pos1 = self.pos + perpendicular1 * dodge_distance
+        test_pos2 = self.pos + perpendicular2 * dodge_distance
+        
+        # Check validity (bounds, walls, other projectiles)
+        valid1 = self.is_position_safe(test_pos1, incoming_projectiles)
+        valid2 = self.is_position_safe(test_pos2, incoming_projectiles)
+        
+        # Return best valid direction
+        if valid1 and valid2:
+            return random.choice([perpendicular1, perpendicular2])
+        elif valid1:
+            return perpendicular1
+        elif valid2:
+            return perpendicular2
+        else:
+            # Check backwards movement if perpendicular isn't safe
+            backwards = -projectile_dir
+            test_pos_back = self.pos + backwards * dodge_distance
+            if self.is_position_safe(test_pos_back, incoming_projectiles):
+                return backwards
+            
+            # If nothing is safe, panic dodge perpendicular hoping for best
+            return random.choice([perpendicular1, perpendicular2])
+
+    def is_position_safe(self, pos, projectiles):
+        """Check if a position is safe from walls and projectiles"""
+        # Bounds check
+        if pos.x < 0 or pos.x > MAP_WIDTH or pos.y < 0 or pos.y > MAP_HEIGHT:
+            return False
+            
+        # Wall check
+        test_rect = pygame.Rect(pos.x, pos.y, ENEMY_SIZE, ENEMY_SIZE)
+        if any(wall.rect.colliderect(test_rect) for wall in self.game.walls):
+            return False
+            
+        # Projectile check (don't dodge INTO another projectile path)
+        for proj_info in projectiles:
+            proj = proj_info[0]
+            if not hasattr(proj, 'vel'): continue
+            
+            # Check distance from projectile line if we were at 'pos'
+            if hasattr(proj, 'rect'):
+                proj_center = vec(proj.rect.centerx, proj.rect.centery)
+                # Distance to projectile center
+                dist_future = (proj_center - pos).length()
+                
+                # If we get dangerously close (< 60) to ANY projectile, unsafe
+                if dist_future < 60:
+                    return False
+        return True
+    
     def update(self):
+        now = pygame.time.get_ticks()
+        
+        # Check if currently in a dodge maneuver
+        dodge_velocity = None
+        currently_dodging = False
+        
+        if self.dodge_direction and (now - self.dodge_start_time) < self.dodge_duration:
+            # Continue current dodge
+            currently_dodging = True
+            dodge_velocity = self.dodge_direction.normalize() * (ENEMY_SPEED * 3)  # 3x speed for bigger movements
+        else:
+            # Dodge finished, reset
+            self.dodge_direction = None
+            
+            # Check for new projectile dodging (uses separate dodge difficulty setting)
+            dodge_difficulty = self.game.ai_dodge_difficulty
+            
+            # Only dodge if difficulty allows it
+            if dodge_difficulty != 'easy':
+                incoming_projectiles = self.detect_incoming_projectiles()
+                
+                if incoming_projectiles:
+                    # Dodge chance based on dodge difficulty (not aim difficulty)
+                    if dodge_difficulty == 'hardcore':
+                        dodge_chance = 1.0  # Always dodge (100% chance)
+                    elif dodge_difficulty == 'hard':
+                        dodge_chance = 0.8  # 80% chance
+                    else:
+                        dodge_chance = 0.5  # 50% chance (normal)
+                    
+                    if random.random() < dodge_chance:
+                        dodge_dir = self.calculate_dodge_direction(incoming_projectiles)
+                        
+                        if dodge_dir:
+                            # Start new dodge
+                            self.dodge_direction = dodge_dir
+                            self.dodge_start_time = now
+                            currently_dodging = True
+                            dodge_velocity = dodge_dir.normalize() * (ENEMY_SPEED * 3)  # 3x speed
+        
+        
         # AI behavior: prioritize upgrades, then chase player
         target_pos = None
         
@@ -381,12 +662,17 @@ class Enemy(pygame.sprite.Sprite):
             # Otherwise chase player
             target_pos = self.game.player.pos
         
-        # Move towards target
-        dir = target_pos - self.pos
-        if dir.length() > 0:
-            self.vel = dir.normalize() * ENEMY_SPEED
+        # Move towards target (or dodge if necessary)
+        if dodge_velocity:
+            # Dodging takes priority over normal movement
+            self.vel = dodge_velocity
         else:
-            self.vel = vec(0, 0)
+            # Normal movement
+            dir = target_pos - self.pos
+            if dir.length() > 0:
+                self.vel = dir.normalize() * ENEMY_SPEED
+            else:
+                self.vel = vec(0, 0)
             
         self.pos += self.vel * self.game.dt
         
@@ -407,8 +693,12 @@ class Enemy(pygame.sprite.Sprite):
             fire_rate = max(100, fire_rate - self.fire_rate_bonus)
         
         if now - self.last_shot > fire_rate:
-            # Shoot at player
-            self.game.shoot(self, (self.game.player.rect.centerx, self.game.player.rect.centery))
+            # Calculate predicted target position
+            predicted_target = self.calculate_predicted_target()
+            
+            # Only shoot if we have line of sight
+            if self.has_line_of_sight(predicted_target):
+                self.game.shoot(self, predicted_target)
 
         if self.hp <= 0:
             self.kill()

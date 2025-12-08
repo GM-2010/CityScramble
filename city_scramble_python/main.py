@@ -15,6 +15,8 @@ class Game:
         self.clock = pygame.time.Clock()
         self.running = True
         self.font = pygame.font.SysFont("Arial", 24)
+        self.small_font = pygame.font.SysFont("Arial", 18)  # For shop subtexts
+        self.medium_font = pygame.font.SysFont("Arial", 26)  # Smaller for compact buttons
         self.large_font = pygame.font.SysFont("Arial", 48)
         # Default maximum number of enemies; can be changed in the start menu
         self.max_enemies = 7
@@ -108,6 +110,21 @@ class Game:
         if hasattr(self, 'saved_minimap_active'):
             self.minimap_active = self.saved_minimap_active
         
+        # AI Aim Difficulty setting
+        self.ai_aim_difficulty = 'normal'  # Options: 'easy', 'normal', 'hard'
+        if hasattr(self, 'saved_ai_aim_difficulty'):
+            self.ai_aim_difficulty = self.saved_ai_aim_difficulty
+        
+        # AI Dodge Difficulty setting (separate from aiming)
+        self.ai_dodge_difficulty = 'normal'  # Options: 'easy', 'normal', 'hard'
+        if hasattr(self, 'saved_ai_dodge_difficulty'):
+            self.ai_dodge_difficulty = self.saved_ai_dodge_difficulty
+        
+        # Tutorial completion tracking
+        self.tutorial_completed = False
+        if hasattr(self, 'saved_tutorial_completed'):
+            self.tutorial_completed = self.saved_tutorial_completed
+        
         # Music setup - separate files for menu and match
         # Menu music (start.mp3) - plays in start screen
         self.menu_music_file = os.path.join(os.path.dirname(__file__), "start.mp3")
@@ -156,8 +173,15 @@ class Game:
             print(f"[INFO] Konnte Match-Sound-Layer-2 nicht laden: {e}")
             print(f"       Optional: Fuege 'sound2.mp3' zum Verzeichnis hinzu")
 
-    def new(self):
+    def new(self, tutorial_mode=False):
         # Start a new game
+        self.tutorial_mode = tutorial_mode
+        self.tutorial_step = 0
+        self.tutorial_progress = 0
+        self.tutorial_shots_fired = 0
+        self.tutorial_target_pos = None
+        self.tutorial_message = ""
+        
         self.all_sprites = CameraGroup()  # Use CameraGroup
         self.walls = pygame.sprite.Group()
         self.projectiles = pygame.sprite.Group()
@@ -176,23 +200,24 @@ class Game:
         if not hasattr(self, 'enemy_count_pickups'):
             self.enemy_count_pickups = 0
         
-        # Initial Enemies (use max_enemies)
-        for i in range(self.max_enemies):
-            while True:
-                # Spawn in top-left corner area
-                x = random.randint(0, MAP_WIDTH // 4)
-                y = random.randint(0, MAP_HEIGHT // 4)
-                rect = pygame.Rect(x, y, ENEMY_SIZE, ENEMY_SIZE)
-                if not any(wall.rect.colliderect(rect) for wall in self.walls):
-                    enemy = Enemy(self, x, y)
-                    enemy.enemy_index = i  # Assign unique index
-                    # Restore upgrades if they exist
-                    if i in self.enemy_upgrades:
-                        if 'fire_rate_bonus' in self.enemy_upgrades[i]:
-                            enemy.fire_rate_bonus = self.enemy_upgrades[i]['fire_rate_bonus']
-                        if 'health_pickups' in self.enemy_upgrades[i]:
-                            enemy.health_pickups = self.enemy_upgrades[i]['health_pickups']
-                    break
+        # Initial Enemies (use max_enemies) - SKIP IN TUTORIAL
+        if not self.tutorial_mode:
+            for i in range(self.max_enemies):
+                while True:
+                    # Spawn in top-left corner area
+                    x = random.randint(0, MAP_WIDTH // 4)
+                    y = random.randint(0, MAP_HEIGHT // 4)
+                    rect = pygame.Rect(x, y, ENEMY_SIZE, ENEMY_SIZE)
+                    if not any(wall.rect.colliderect(rect) for wall in self.walls):
+                        enemy = Enemy(self, x, y)
+                        enemy.enemy_index = i  # Assign unique index
+                        # Restore upgrades if they exist
+                        if i in self.enemy_upgrades:
+                            if 'fire_rate_bonus' in self.enemy_upgrades[i]:
+                                enemy.fire_rate_bonus = self.enemy_upgrades[i]['fire_rate_bonus']
+                            if 'health_pickups' in self.enemy_upgrades[i]:
+                                enemy.health_pickups = self.enemy_upgrades[i]['health_pickups']
+                        break
 
         # Obstacle respawn queue: list of (respawn_time, x, y, w, h)
         self.obstacle_respawn_queue = []
@@ -202,15 +227,22 @@ class Game:
         self.destroyed_building_zones = []
 
         # Create some obstacles (randomly scattered for now)
-        for _ in range(20):
+        # In tutorial, create a controlled environment (or just fewer obstacles)
+        num_obstacles = 5 if self.tutorial_mode else 20
+        for _ in range(num_obstacles):
             x = random.randint(0, MAP_WIDTH - 100)
             y = random.randint(0, MAP_HEIGHT - 100)
             w = random.randint(50, 200)
             h = random.randint(50, 200)
+            # Ensure not spawning on player in tutorial
+            if self.tutorial_mode:
+                if abs(x - self.player.pos.x) < 300 and abs(y - self.player.pos.y) < 300:
+                    continue
             Obstacle(self, x, y, w, h)
 
-        # Spawn weapons
-        self.spawn_weapons()
+        # Spawn weapons - SKIP IN TUTORIAL (spawned by script)
+        if not self.tutorial_mode:
+            self.spawn_weapons()
 
         self.score = 0
         self.start_time = pygame.time.get_ticks()
@@ -308,6 +340,8 @@ class Game:
             sprite.last_shot = now
             # Determine direction
             if isinstance(sprite, Player):
+                if self.tutorial_mode:
+                    self.tutorial_shots_fired += 1
                 mx, my = pygame.mouse.get_pos()
                 camera_offset = self.all_sprites.offset
                 world_mouse_pos = vec(mx, my) + camera_offset
@@ -387,6 +421,23 @@ class Game:
 
     def update(self):
         self.all_sprites.update()
+        
+        if self.tutorial_mode:
+            self.update_tutorial()
+            # Still allow building respawn in tutorial
+            now = pygame.time.get_ticks()
+            # Respawn broken buildings
+            for item in self.obstacle_respawn_queue[:]:
+                respawn_time, x, y, w, h = item
+                if now > respawn_time:
+                    Obstacle(self, x, y, w, h)
+                    self.obstacle_respawn_queue.remove(item)
+                    # Remove from destroyed zones
+                    for zone in self.destroyed_building_zones[:]:
+                        if zone.x == x and zone.y == y and zone.width == w and zone.height == h:
+                            self.destroyed_building_zones.remove(zone)
+            return
+
         # Enemy Respawn Logic (use max_enemies)
         if len(self.enemies) < self.max_enemies:
             now = pygame.time.get_ticks()
@@ -532,12 +583,100 @@ class Game:
         if self.player.hit_count >= 10:
             self.playing = False
 
+    def update_tutorial(self):
+        # Tutorial State Machine
+        
+        # Step 0: Movement
+        if self.tutorial_step == 0:
+            self.tutorial_message = "Bewege dich mit WASD oder Pfeiltasten"
+            if self.player.vel.length() > 0:
+                self.tutorial_progress += 1
+            if self.tutorial_progress > 60:  # Ca. 1 Sekunde Bewegung
+                self.tutorial_step = 1
+                self.tutorial_progress = 0
+                self.tutorial_shots_fired = 0  # Reset for next step
+        
+        # Step 1: Shooting
+        elif self.tutorial_step == 1:
+            shots_needed = 3
+            self.tutorial_message = f"Schieße {shots_needed} mal mit LINKSKLICK ({self.tutorial_shots_fired}/{shots_needed})"
+            if self.tutorial_shots_fired >= shots_needed:
+                self.tutorial_step = 2
+                self.tutorial_progress = 0
+                self.last_destroyed_buildings_count = len(self.obstacle_respawn_queue)
+        
+        # Step 2: Destruction
+        elif self.tutorial_step == 2:
+            self.tutorial_message = "Zerstöre eine Wand mit RECHTSKLICK (10 Treffer)"
+            # Check if a new building was destroyed
+            if len(self.obstacle_respawn_queue) > self.last_destroyed_buildings_count:
+                self.tutorial_step = 3
+                self.tutorial_progress = 0
+                # Spawn a weapon nearby
+                spawn_pos = self.player.pos + vec(100, 0)
+                # Ensure within bounds
+                x = max(50, min(MAP_WIDTH - 50, spawn_pos.x))
+                y = max(50, min(MAP_HEIGHT - 50, spawn_pos.y))
+                WeaponItem(self, x, y, 'shotgun')
+                self.tutorial_weapon_spawned = True
+        
+        # Step 3: Weapon Pickup
+        elif self.tutorial_step == 3:
+            self.tutorial_message = "Sammle die grüne Shotgun ein (einfach drüberlaufen)"
+            
+            # ALLOW PICKUP IN TUTORIAL
+            hits = pygame.sprite.spritecollide(self.player, self.items, True)
+            for hit in hits:
+                self.player.weapon = hit.type
+            
+            if self.player.weapon == 'shotgun':
+                self.tutorial_step = 4
+                self.tutorial_progress = 0
+                # Spawn a dummy enemy
+                spawn_pos = self.player.pos + vec(0, -300)
+                x = max(50, min(MAP_WIDTH - 50, spawn_pos.x))
+                y = max(50, min(MAP_HEIGHT - 50, spawn_pos.y))
+                enemy = Enemy(self, x, y)
+                # Make enemy weaker or passive?
+                enemy.hit_count = 0 # 3 hits normally
+                # Enemy in tutorial behaves normally but is alone
+        
+        # Step 4: Combat
+        elif self.tutorial_step == 4:
+            self.tutorial_message = "Besiege den Gegner!"
+            if len(self.enemies) == 0:
+                self.tutorial_step = 5
+                self.tutorial_progress = 0
+        
+        # Step 5: Completion
+        elif self.tutorial_step == 5:
+            self.tutorial_message = "Gut gemacht! Drücke RECHTSKLICK zum Beenden"
+            if pygame.mouse.get_pressed()[2]:  # Right click
+                self.tutorial_completed = True
+                self.save_total_score()
+                self.playing = False
+                self.show_message_box("Tutorial Abgeschlossen", "Du bist bereit für das Spiel!")
+
     def draw(self):
         self.screen.fill(DARK_GREY)
         self.all_sprites.custom_draw(self.player)
         
+        # Tutorial Overlay
+        if self.tutorial_mode:
+            # Semi-transparent bar at bottom
+            s = pygame.Surface((SCREEN_WIDTH, 60))
+            s.set_alpha(180)
+            s.fill((0, 0, 0))
+            self.screen.blit(s, (0, SCREEN_HEIGHT - 60))
+            
+            # Message
+            msg_surf = self.medium_font.render(self.tutorial_message, True, (255, 255, 0))
+            msg_rect = msg_surf.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 30))
+            self.screen.blit(msg_surf, msg_rect)
+        
         # HUD
-        self.draw_text(f"Score: {self.score}", 10, 10)
+        if not self.tutorial_mode:
+            self.draw_text(f"Score: {self.score}", 10, 10)
         self.draw_text(f"Weapon: {self.player.weapon.upper()}", 10, SCREEN_HEIGHT - 30)
         self.draw_text(f"Hits: {self.player.hit_count}/10", 10, SCREEN_HEIGHT - 60)
         
@@ -632,22 +771,27 @@ class Game:
             self.menu_music.play(-1)  # -1 = Endlosschleife
             print("[OK] Menue-Musik gestartet (laeuft in Dauerschleife)")
         
-        # Define buttons - 3 main buttons + start
+        # Define buttons - 5 main buttons + start (compact layout)
         button_width = 250
-        button_height = 60
-        button_spacing = 25
+        button_height = 45  # Back to 45
+        button_spacing = 15  # Back to 15
         
-        # Center buttons horizontally
+        # Center buttons horizontally, start higher up
         buttons_x = SCREEN_WIDTH // 2 - button_width // 2
-        buttons_start_y = SCREEN_HEIGHT // 2 + 20
+        buttons_start_y = SCREEN_HEIGHT // 2 - 40  # Adjusted for 5 buttons
         
-        # Three main buttons
+        # Five main buttons
         enemy_button = pygame.Rect(buttons_x, buttons_start_y, button_width, button_height)
-        shop_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing), button_width, button_height)
-        multiplayer_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 2, button_width, button_height)
+        ai_aim_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing), button_width, button_height)
+        ai_dodge_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 2, button_width, button_height)
+        shop_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 3, button_width, button_height)
+        multiplayer_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 4, button_width, button_height)
         
-        # Start button (centered below)
-        start_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, buttons_start_y + (button_height + button_spacing) * 3 + 20, 300, 70)
+        # Tutorial button (Top Left Corner)
+        tutorial_button = pygame.Rect(20, 20, 200, 40)
+        
+        # Start button (centered below, compact)
+        start_button = pygame.Rect(SCREEN_WIDTH // 2 - 140, buttons_start_y + (button_height + button_spacing) * 5 + 15, 280, 55)
         
         while True:
             self.screen.fill(DARK_GREY)
@@ -671,28 +815,57 @@ class Game:
             # Enemy count button
             pygame.draw.rect(self.screen, LIGHT_GREY, enemy_button)
             pygame.draw.rect(self.screen, WHITE, enemy_button, 3)
-            enemy_text = self.large_font.render("Gegner ändern", True, WHITE)
+            enemy_text = self.medium_font.render("Gegner ändern", True, WHITE)
             enemy_text_rect = enemy_text.get_rect(center=enemy_button.center)
             self.screen.blit(enemy_text, enemy_text_rect)
+            
+            # AI Aiming difficulty button
+            difficulty_names = {'easy': 'Einfach', 'normal': 'Normal', 'hard': 'Schwer', 'hardcore': 'HARDCORE'}
+            difficulty_colors = {'easy': (50, 200, 50), 'normal': (255, 200, 50), 'hard': (255, 50, 50), 'hardcore': (200, 0, 200)}
+            current_difficulty_name = difficulty_names[self.ai_aim_difficulty]
+            current_difficulty_color = difficulty_colors[self.ai_aim_difficulty]
+            
+            pygame.draw.rect(self.screen, current_difficulty_color, ai_aim_button)
+            pygame.draw.rect(self.screen, WHITE, ai_aim_button, 3)
+            ai_aim_text = self.medium_font.render(f"KI-Aiming: {current_difficulty_name}", True, WHITE)
+            ai_aim_text_rect = ai_aim_text.get_rect(center=ai_aim_button.center)
+            self.screen.blit(ai_aim_text, ai_aim_text_rect)
+            
+            # AI Dodge difficulty button
+            dodge_difficulty_name = difficulty_names[self.ai_dodge_difficulty]
+            dodge_difficulty_color = difficulty_colors[self.ai_dodge_difficulty]
+            
+            pygame.draw.rect(self.screen, dodge_difficulty_color, ai_dodge_button)
+            pygame.draw.rect(self.screen, WHITE, ai_dodge_button, 3)
+            ai_dodge_text = self.medium_font.render(f"KI-Ausweichen: {dodge_difficulty_name}", True, WHITE)
+            ai_dodge_text_rect = ai_dodge_text.get_rect(center=ai_dodge_button.center)
+            self.screen.blit(ai_dodge_text, ai_dodge_text_rect)
+            
+            # Tutorial button
+            pygame.draw.rect(self.screen, (255, 150, 50), tutorial_button)  # Orange
+            pygame.draw.rect(self.screen, WHITE, tutorial_button, 3)
+            tutorial_text = self.medium_font.render("TUTORIAL", True, WHITE)
+            tutorial_text_rect = tutorial_text.get_rect(center=tutorial_button.center)
+            self.screen.blit(tutorial_text, tutorial_text_rect)
             
             # Unified Shop button
             pygame.draw.rect(self.screen, (100, 200, 255), shop_button)
             pygame.draw.rect(self.screen, WHITE, shop_button, 3)
-            shop_text = self.large_font.render("SHOP", True, WHITE)
+            shop_text = self.medium_font.render("SHOP", True, WHITE)
             shop_text_rect = shop_text.get_rect(center=shop_button.center)
             self.screen.blit(shop_text, shop_text_rect)
             
             # Multiplayer button
             pygame.draw.rect(self.screen, (255, 100, 255), multiplayer_button)
             pygame.draw.rect(self.screen, WHITE, multiplayer_button, 3)
-            multi_text = self.large_font.render("1vs1 ONLINE", True, WHITE)
+            multi_text = self.medium_font.render("1vs1 ONLINE", True, WHITE)
             multi_text_rect = multi_text.get_rect(center=multiplayer_button.center)
             self.screen.blit(multi_text, multi_text_rect)
             
             # Start game button
             pygame.draw.rect(self.screen, (50, 200, 50), start_button)
             pygame.draw.rect(self.screen, WHITE, start_button, 4)
-            start_text = self.large_font.render("SPIEL STARTEN", True, WHITE)
+            start_text = self.medium_font.render("SPIEL STARTEN", True, WHITE)
             start_text_rect = start_text.get_rect(center=start_button.center)
             self.screen.blit(start_text, start_text_rect)
             
@@ -704,14 +877,37 @@ class Game:
                 if event.type == pygame.MOUSEBUTTONUP:
                     if enemy_button.collidepoint(event.pos):
                         self.max_enemies = self.max_enemies + 1 if self.max_enemies < 20 else 1
+                    elif ai_aim_button.collidepoint(event.pos):
+                        # Cycle through difficulties: easy -> normal -> hard -> hardcore -> easy
+                        if self.ai_aim_difficulty == 'easy':
+                            self.ai_aim_difficulty = 'normal'
+                        elif self.ai_aim_difficulty == 'normal':
+                            self.ai_aim_difficulty = 'hard'
+                        elif self.ai_aim_difficulty == 'hard':
+                            self.ai_aim_difficulty = 'hardcore'
+                        else:
+                            self.ai_aim_difficulty = 'easy'
+                        self.save_total_score()  # Save the setting
+                    elif ai_dodge_button.collidepoint(event.pos):
+                        # Cycle through difficulties: easy -> normal -> hard -> hardcore -> easy
+                        if self.ai_dodge_difficulty == 'easy':
+                            self.ai_dodge_difficulty = 'normal'
+                        elif self.ai_dodge_difficulty == 'normal':
+                            self.ai_dodge_difficulty = 'hard'
+                        elif self.ai_dodge_difficulty == 'hard':
+                            self.ai_dodge_difficulty = 'hardcore'
+                        else:
+                            self.ai_dodge_difficulty = 'easy'
+                        self.save_total_score()  # Save the setting
+                    elif tutorial_button.collidepoint(event.pos):
+                        # Show tutorial
+                        self.show_tutorial()
                     elif shop_button.collidepoint(event.pos):
                         self.show_unified_shop()
                     elif multiplayer_button.collidepoint(event.pos):
                         self.show_multiplayer_menu()
                     elif start_button.collidepoint(event.pos):
                         return
-                if event.type == pygame.KEYUP:
-                    return
 
     def show_multiplayer_menu(self):
         """Multiplayer host/join selection menu"""
@@ -763,7 +959,8 @@ class Game:
     
     def multiplayer_host(self):
         """Host multiplayer game"""
-        from network import GameClient
+        from network import GameClient, get_local_ip
+        local_ip = get_local_ip()
         client = GameClient()
         if not client.connect():
             self.show_message_box("Fehler", "Server nicht erreichbar!")
@@ -788,8 +985,12 @@ class Game:
             pygame.draw.rect(self.screen, (255, 255, 100), (code_rect.x - 20, code_rect.y - 20, code_rect.width + 40, code_rect.height + 40), 3)
             self.screen.blit(code_text, code_rect)
             
-            instr = self.font.render("Gib diesen Code an deinen Gegner weiter!", True, WHITE)
-            self.screen.blit(instr, (SCREEN_WIDTH // 2 - 200, SCREEN_HEIGHT // 2 + 80))
+            # Show Monitor/IP Info
+            ip_text = self.font.render(f"Host-IP: {local_ip}", True, (100, 255, 100))
+            self.screen.blit(ip_text, (SCREEN_WIDTH // 2 - ip_text.get_width() // 2, SCREEN_HEIGHT // 2 + 60))
+            
+            instr = self.font.render("Gib Code & IP an deinen Gegner weiter!", True, WHITE)
+            self.screen.blit(instr, (SCREEN_WIDTH // 2 - instr.get_width() // 2, SCREEN_HEIGHT // 2 + 100))
             
             cancel_btn = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 100, 200, 50)
             pygame.draw.rect(self.screen, (200, 50, 50), cancel_btn)
@@ -819,12 +1020,19 @@ class Game:
     def multiplayer_join(self):
         """Join multiplayer game via room code"""
         from network import GameClient
+        
+        # 1. Ask for Host IP
+        host_ip = self.get_text_input("HOST-IP EINGEBEN (Leer=Lokal)", "127.0.0.1", max_length=15)
+        if host_ip is None: return
+        if host_ip == "": host_ip = "127.0.0.1"
+        
+        # 2. Ask for Room Code
         room_code = self.get_text_input("RAUM-CODE EINGEBEN")
         if not room_code:
             return
         
         client = GameClient()
-        if not client.connect():
+        if not client.connect(host=host_ip):
             self.show_message_box("Fehler", "Server nicht erreichbar!")
             return
         
@@ -834,19 +1042,22 @@ class Game:
             self.show_message_box("Fehler", f"Raum '{room_code}' nicht gefunden!")
             client.close()
     
-    def get_text_input(self, prompt):
-        """Simple text input dialog for room code"""
-        text = ""
+    def get_text_input(self, prompt, default_text="", max_length=6):
+        """Simple text input dialog"""
+        text = default_text
         while True:
+            # Drawing code skipped for brevity (unchanged logic, just parameters)
             self.screen.fill(DARK_GREY)
             prompt_surf = self.large_font.render(prompt, True, WHITE)
-            self.screen.blit(prompt_surf, (SCREEN_WIDTH // 2 - 200, 200))
+            self.screen.blit(prompt_surf, (SCREEN_WIDTH // 2 - prompt_surf.get_width() // 2, 200))
             
             input_box = pygame.Rect(SCREEN_WIDTH // 2 - 150, SCREEN_HEIGHT // 2 - 30, 300, 60)
             pygame.draw.rect(self.screen, (50, 50, 50), input_box)
             pygame.draw.rect(self.screen, WHITE, input_box, 3)
-            text_surf = pygame.font.SysFont("Arial", 48).render(text, True, (255, 255, 100))
-            self.screen.blit(text_surf, (input_box.centerx - text_surf.get_width() // 2, input_box.centery - 24))
+            # Use smaller font if text is long
+            font_size = 48 if len(text) < 10 else 32
+            text_surf = pygame.font.SysFont("Arial", font_size).render(text, True, (255, 255, 100))
+            self.screen.blit(text_surf, (input_box.centerx - text_surf.get_width() // 2, input_box.centery - text_surf.get_height() // 2))
             
             ok_btn = pygame.Rect(SCREEN_WIDTH // 2 - 110, SCREEN_HEIGHT - 150, 100, 50)
             cancel_btn = pygame.Rect(SCREEN_WIDTH // 2 + 10, SCREEN_HEIGHT - 150, 100, 50)
@@ -869,7 +1080,7 @@ class Game:
                         return None
                     elif event.key == pygame.K_BACKSPACE:
                         text = text[:-1]
-                    elif len(text) < 6 and event.unicode.isalnum():
+                    elif len(text) < max_length and (event.unicode.isalnum() or event.unicode in ['.', ':']):
                         text += event.unicode.upper()
                 if event.type == pygame.MOUSEBUTTONUP:
                     if ok_btn.collidepoint(event.pos):
@@ -928,7 +1139,12 @@ class Game:
         self.walls = pygame.sprite.Group()
         self.projectiles = pygame.sprite.Group()
         self.items = pygame.sprite.Group()
+        self.upgrade_items = pygame.sprite.Group()
         self.enemies = pygame.sprite.Group()  # Empty - no AI
+        
+        self.destroyed_building_zones = []
+        self.obstacle_respawn_queue = []
+        self.tutorial_mode = False
         
         # Create local player
         self.player = Player(self, MAP_WIDTH - 100 if is_host else 100, MAP_HEIGHT - 100 if is_host else 100)
@@ -989,12 +1205,52 @@ class Game:
                     # Remote player shot
                     data = msg['data']
                     from sprites import Projectile, Grenade
-                    if data['weapon'] == 'grenade':
-                        Grenade(self, data['x'], data['y'], data['dx'], data['dy'], 'enemy',
-                               data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
-                    else:
-                        Projectile(self, data['x'], data['y'], data['dx'], data['dy'], 'enemy',
-                                 data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
+                    
+                    # Recreate spread/count based on weapon stats
+                    weapon_stats = WEAPONS[data['weapon']]
+                    dir = vec(data['dx'], data['dy'])
+                    
+                    for _ in range(weapon_stats['count']):
+                        spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
+                        vel = dir.rotate(spread)
+                        
+                        if data['weapon'] == 'grenade':
+                            Grenade(self, data['x'], data['y'], vel.x, vel.y, 'enemy',
+                                   data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
+                        else:
+                            Projectile(self, data['x'], data['y'], vel.x, vel.y, 'enemy',
+                                     data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
+                
+                elif msg.get('type') == 'shoot_building':
+                    # Remote player shot at building
+                    data = msg['data']
+                    from sprites import BuildingProjectile
+                    
+                    weapon_stats = WEAPONS[data['weapon']]
+                    dir = vec(data['dx'], data['dy'])
+                    
+                    for _ in range(weapon_stats['count']):
+                        spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
+                        vel = dir.rotate(spread)
+                        BuildingProjectile(self, data['x'], data['y'], vel.x, vel.y,
+                                         data['damage'], data['speed'], data['lifetime'], (255, 165, 0))
+
+                elif msg.get('type') == 'destroy_wall':
+                    # Destroy specific wall
+                    x, y = msg['x'], msg['y']
+                    # Find obstacle at original coordinates
+                    for wall in self.walls:
+                        if hasattr(wall, 'original_x') and wall.original_x == x and wall.original_y == y:
+                            # Force kill without sending another event
+                            # But wait, take_damage calls kill().
+                            # If we just kill() it, it won't respawn?
+                            # take_damage triggers respawn schedule.
+                            # So we should manually schedule respawn and kill.
+                            if hasattr(wall, 'game'):
+                                wall.game.schedule_obstacle_respawn(wall.original_x, wall.original_y, 
+                                                                  wall.original_w, wall.original_h)
+                            wall.kill()
+                            break
             
             # Update sprites
             self.all_sprites.update()
@@ -1063,8 +1319,8 @@ class Game:
             # Shops button
             pygame.draw.rect(self.screen, (100, 200, 100), shops_button)
             pygame.draw.rect(self.screen, WHITE, shops_button, 4)
-            shops_text = self.large_font.render("SHOPS", True, WHITE)
-            shops_subtext = self.font.render("(Waffen, Charakter, Kugel, Kill-Anim, Spezial)", True, WHITE)
+            shops_text = self.medium_font.render("SHOPS", True, WHITE)
+            shops_subtext = self.small_font.render("(Waffen, Charakter, Kugel, Kill-Anim, Spezial)", True, WHITE)
             shops_text_rect = shops_text.get_rect(center=(shops_button.centerx, shops_button.centery - 15))
             shops_subtext_rect = shops_subtext.get_rect(center=(shops_button.centerx, shops_button.centery + 15))
             self.screen.blit(shops_text, shops_text_rect)
@@ -1073,8 +1329,8 @@ class Game:
             # Wardrobes button
             pygame.draw.rect(self.screen, (200, 100, 200), wardrobes_button)
             pygame.draw.rect(self.screen, WHITE, wardrobes_button, 4)
-            wardrobes_text = self.large_font.render("KLEIDERSCHRÄNKE", True, WHITE)
-            wardrobes_subtext = self.font.render("(Charakter, Kugel, Kill-Anim, Spezial)", True, WHITE)
+            wardrobes_text = self.medium_font.render("KLEIDERSCHRÄNKE", True, WHITE)
+            wardrobes_subtext = self.small_font.render("(Charakter, Kugel, Kill-Anim, Spezial)", True, WHITE)
             wardrobes_text_rect = wardrobes_text.get_rect(center=(wardrobes_button.centerx, wardrobes_button.centery - 15))
             wardrobes_subtext_rect = wardrobes_subtext.get_rect(center=(wardrobes_button.centerx, wardrobes_button.centery + 15))
             self.screen.blit(wardrobes_text, wardrobes_text_rect)
@@ -2356,6 +2612,15 @@ class Game:
                         self.saved_minimap_owned = data.get('minimap_owned', False)
                     if 'minimap_active' in data:
                         self.saved_minimap_active = data.get('minimap_active', False)
+                    # Load AI aim difficulty
+                    if 'ai_aim_difficulty' in data:
+                        self.saved_ai_aim_difficulty = data.get('ai_aim_difficulty', 'normal')
+                    # Load AI dodge difficulty
+                    if 'ai_dodge_difficulty' in data:
+                        self.saved_ai_dodge_difficulty = data.get('ai_dodge_difficulty', 'normal')
+                    # Load tutorial completion
+                    if 'tutorial_completed' in data:
+                        self.saved_tutorial_completed = data.get('tutorial_completed', False)
                     return data.get('total_score', 0)
         except Exception as e:
             print(f"Error loading score: {e}")
@@ -2376,13 +2641,23 @@ class Game:
                     'owned_kill_animations': self.owned_kill_animations,
                     'selected_kill_animation': self.selected_kill_animation,
                     'minimap_owned': self.minimap_owned,
-                    'minimap_active': self.minimap_active
+                    'minimap_active': self.minimap_active,
+                    'ai_aim_difficulty': self.ai_aim_difficulty,
+                    'ai_dodge_difficulty': self.ai_dodge_difficulty,
+                    'tutorial_completed': self.tutorial_completed
                 }, f)
         except Exception as e:
             print(f"Error saving score: {e}")
+    
+    def show_tutorial(self):
+        """Interactive in-game tutorial"""
+        self.new(tutorial_mode=True)
 
 if __name__ == "__main__":
     g = Game()
+    # Show tutorial for new players
+    if not g.tutorial_completed:
+        g.show_tutorial()
     g.show_start_screen()
     while g.running:
         g.new()
