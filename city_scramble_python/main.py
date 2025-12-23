@@ -45,7 +45,7 @@ class Game:
         self.character_colors = {
             'white': {'name': 'Weiß', 'rgb': (255, 255, 255), 'cost': 0},  # Default, free
             'yellow': {'name': 'Gelb', 'rgb': (255, 255, 0), 'cost': 15000},
-            'blue': {'name': 'Blau', 'rgb': (0, 100, 255), 'cost': 150000},
+            'blue': {'name': 'Blau', 'rgb': (0, 100, 255), 'cost': 15000},
             'green': {'name': 'Grün', 'rgb': (0, 255, 0), 'cost': 15000},
             'black': {'name': 'Schwarz', 'rgb': (30, 30, 30), 'cost': 15000},
             'brown': {'name': 'Braun', 'rgb': (139, 69, 19), 'cost': 15000},
@@ -119,7 +119,12 @@ class Game:
         self.ai_dodge_difficulty = 'normal'  # Options: 'easy', 'normal', 'hard'
         if hasattr(self, 'saved_ai_dodge_difficulty'):
             self.ai_dodge_difficulty = self.saved_ai_dodge_difficulty
-        
+
+        # Game Mode setting
+        self.game_mode = 'classic'  # Options: 'classic', 'survival', 'team5v5'
+        if hasattr(self, 'saved_game_mode'):
+            self.game_mode = self.saved_game_mode
+
         # Tutorial completion tracking
         self.tutorial_completed = False
         if hasattr(self, 'saved_tutorial_completed'):
@@ -189,7 +194,54 @@ class Game:
         self.items = pygame.sprite.Group()
         self.upgrade_items = pygame.sprite.Group()  # For AI upgrades
 
-        self.player = Player(self, MAP_WIDTH - 100, MAP_HEIGHT - 100)  # Spawn in bottom-right corner
+        # Team mode groups
+        self.team_allies = pygame.sprite.Group()  # Blue team (player + 4 AI)
+        self.team_enemies = pygame.sprite.Group()  # Red team (5 AI)
+
+        # Team mode variables
+        if self.game_mode == 'team5v5':
+            self.team_blue_score = 0
+            self.team_red_score = 0
+            self.match_start_time = pygame.time.get_ticks()
+            self.match_duration = 180000  # 3 minutes in milliseconds
+            self.team_respawn_queue = []  # (respawn_time, team, x, y)
+
+            # Blue team spawn point (bottom-right)
+            blue_spawn_x = MAP_WIDTH - 200
+            blue_spawn_y = MAP_HEIGHT - 200
+
+            # Red team spawn point (top-left)
+            red_spawn_x = 100
+            red_spawn_y = 100
+
+            # Create player (blue team)
+            self.player = Player(self, blue_spawn_x, blue_spawn_y)
+            self.player.team = 'blue'
+            self.player.image.fill((50, 50, 255))  # Blue color
+            self.team_allies.add(self.player)
+
+            # Create 4 blue AI teammates (always 4, regardless of max_enemies setting)
+            for i in range(4):
+                offset_x = random.randint(-100, 100)
+                offset_y = random.randint(-100, 100)
+                x = max(50, min(MAP_WIDTH - 50, blue_spawn_x + offset_x))
+                y = max(50, min(MAP_HEIGHT - 50, blue_spawn_y + offset_y))
+                TeamAI(self, x, y, team='blue', member_index=i+1)
+
+            # Create 5 red AI enemies (always 5, regardless of max_enemies setting)
+            for i in range(5):
+                offset_x = random.randint(-100, 100)
+                offset_y = random.randint(-100, 100)
+                x = max(50, min(MAP_WIDTH - 50, red_spawn_x + offset_x))
+                y = max(50, min(MAP_HEIGHT - 50, red_spawn_y + offset_y))
+                red_ai = TeamAI(self, x, y, team='red', member_index=i)
+                print(f"DEBUG: Created red TeamAI #{i+1}, in team_enemies: {red_ai in self.team_enemies.sprites()}")
+
+            print(f"DEBUG: Total team_enemies: {len(self.team_enemies)}")
+            print(f"DEBUG: Total team_allies: {len(self.team_allies)}")
+        else:
+            # Normal spawn for non-team modes
+            self.player = Player(self, MAP_WIDTH - 100, MAP_HEIGHT - 100)  # Spawn in bottom-right corner
 
         # Enemy upgrade storage - persists across respawns
         # Format: {enemy_index: {'fire_rate_bonus': 0, 'health_pickups': 0}}
@@ -200,8 +252,8 @@ class Game:
         if not hasattr(self, 'enemy_count_pickups'):
             self.enemy_count_pickups = 0
         
-        # Initial Enemies (use max_enemies) - SKIP IN TUTORIAL
-        if not self.tutorial_mode:
+        # Initial Enemies (use max_enemies) - SKIP IN TUTORIAL AND TEAM MODE
+        if not self.tutorial_mode and self.game_mode != 'team5v5':
             for i in range(self.max_enemies):
                 while True:
                     # Spawn in top-left corner area
@@ -226,19 +278,51 @@ class Game:
         # Items should not spawn in these zones until building respawns
         self.destroyed_building_zones = []
 
-        # Create some obstacles (randomly scattered for now)
-        # In tutorial, create a controlled environment (or just fewer obstacles)
-        num_obstacles = 5 if self.tutorial_mode else 20
-        for _ in range(num_obstacles):
-            x = random.randint(0, MAP_WIDTH - 100)
-            y = random.randint(0, MAP_HEIGHT - 100)
-            w = random.randint(50, 200)
-            h = random.randint(50, 200)
-            # Ensure not spawning on player in tutorial
-            if self.tutorial_mode:
-                if abs(x - self.player.pos.x) < 300 and abs(y - self.player.pos.y) < 300:
-                    continue
-            Obstacle(self, x, y, w, h)
+        if self.game_mode == 'team5v5':
+            # FIXED MAP LAYOUT FOR 5VS5
+            # Create defensive cover around Blue spawn (Bottom-Right)
+            blue_base_x = MAP_WIDTH - 200
+            blue_base_y = MAP_HEIGHT - 200
+            
+            # Defensive walls (U-shape pointing towards center)
+            # Top wall
+            Obstacle(self, blue_base_x - 300, blue_base_y - 200, 400, 50)
+            # Left wall
+            Obstacle(self, blue_base_x - 300, blue_base_y - 200, 50, 400)
+            # Bottom wall
+            Obstacle(self, blue_base_x - 300, blue_base_y + 150, 400, 50)
+            
+            # Some scattered cover in the middle field
+            Obstacle(self, MAP_WIDTH // 2 - 100, MAP_HEIGHT // 2 - 100, 200, 200) # Center block
+            Obstacle(self, MAP_WIDTH // 2 - 400, MAP_HEIGHT // 2 + 200, 100, 100)
+            Obstacle(self, MAP_WIDTH // 2 + 300, MAP_HEIGHT // 2 - 300, 100, 100)
+            
+            # Create defensive cover around Red spawn (Top-Left)
+            red_base_x = 100
+            red_base_y = 100
+            
+            # Defensive walls (U-shape pointing towards center)
+            # Bottom wall
+            Obstacle(self, red_base_x + 100, red_base_y + 300, 400, 50)
+            # Right wall
+            Obstacle(self, red_base_x + 450, red_base_y + 100, 50, 400)
+            # Top wall
+            Obstacle(self, red_base_x + 100, red_base_y - 100, 400, 50)
+
+        else:
+            # Create some obstacles (randomly scattered for now)
+            # In tutorial, create a controlled environment (or just fewer obstacles)
+            num_obstacles = 5 if self.tutorial_mode else 20
+            for _ in range(num_obstacles):
+                x = random.randint(0, MAP_WIDTH - 100)
+                y = random.randint(0, MAP_HEIGHT - 100)
+                w = random.randint(50, 200)
+                h = random.randint(50, 200)
+                # Ensure not spawning on player in tutorial
+                if self.tutorial_mode:
+                    if abs(x - self.player.pos.x) < 300 and abs(y - self.player.pos.y) < 300:
+                        continue
+                Obstacle(self, x, y, w, h)
 
         # Spawn weapons - SKIP IN TUTORIAL (spawned by script)
         if not self.tutorial_mode:
@@ -396,20 +480,20 @@ class Game:
         weapon_name = sprite.weapon
         weapon_stats = WEAPONS[weapon_name]
         now = pygame.time.get_ticks()
-        
+
         # Apply fire rate upgrade for player
         fire_rate = weapon_stats['rate']
         if isinstance(sprite, Player):
             fire_rate = max(100, fire_rate - (self.weapon_upgrades[weapon_name]['fire_rate'] * 100))
-        
+
         if now - sprite.last_shot > fire_rate:
             sprite.last_shot = now
-            
+
             # Direction to target
             dir = vec(target_pos.x, target_pos.y) - sprite.pos
             if dir.length() > 0:
                 dir = dir.normalize()
-            
+
             # Create special building-destroying projectiles
             damage = 1  # 1 damage per hit, 10 hits to destroy
             for _ in range(weapon_stats['count']):
@@ -419,9 +503,101 @@ class Game:
                 BuildingProjectile(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y,
                                  damage, weapon_stats['speed'], weapon_stats['lifetime'], (255, 165, 0))  # Orange color
 
+    def shoot_team(self, sprite, target_pos, team):
+        """Shoot for team mode with team-colored projectiles"""
+        weapon_name = sprite.weapon
+        weapon_stats = WEAPONS[weapon_name]
+        now = pygame.time.get_ticks()
+
+        if now - sprite.last_shot > weapon_stats['rate']:
+            # Apply fire rate upgrade for player
+            fire_rate = weapon_stats['rate']
+            if sprite == self.player:
+                fire_rate = max(100, fire_rate - (self.weapon_upgrades[weapon_name]['fire_rate'] * 100))
+            
+            if now - sprite.last_shot > fire_rate:
+                sprite.last_shot = now
+
+                # Direction to target
+                mx, my = target_pos
+                sprite_center = vec(sprite.rect.centerx, sprite.rect.centery)
+                dir = vec(mx, my) - sprite_center
+                if dir.length() > 0:
+                    dir = dir.normalize()
+
+                damage = weapon_stats['damage']
+                # Apply damage upgrade for player
+                if sprite == self.player:
+                     damage = int(damage * (1 + self.weapon_upgrades[weapon_name]['damage'] * 0.1))
+
+            # Set projectile color based on team
+            projectile_color = (50, 50, 255) if team == 'blue' else (255, 50, 50)
+            owner = f'team_{team}'
+
+            print(f"DEBUG: shoot_team called by {team} team, owner={owner}, damage={damage}")
+
+            # Create projectiles
+            for _ in range(weapon_stats['count']):
+                spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
+                vel = dir.rotate(spread)
+                if weapon_name == 'grenade':
+                    proj = Grenade(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y, owner,
+                           damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, False)
+                else:
+                    proj = Projectile(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y, owner,
+                              damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, False)
+                print(f"DEBUG: Created projectile with owner={proj.owner}")
+
+    def schedule_team_respawn(self, team, x, y):
+        """Schedule a team member to respawn after delay"""
+        respawn_time = pygame.time.get_ticks() + 5000  # 5 second respawn delay
+        self.team_respawn_queue.append((respawn_time, team, x, y))
+
     def update(self):
         self.all_sprites.update()
-        
+
+        # Check for game over in survival mode
+        if self.game_mode == 'survival' and self.player.hit_count >= 10:
+            self.playing = False
+            return
+
+        # Check for time up in team5v5 mode
+        if self.game_mode == 'team5v5':
+            elapsed = pygame.time.get_ticks() - self.match_start_time
+            if elapsed >= self.match_duration:
+                self.playing = False
+                return
+
+            # Check if player died in team mode - respawn after 5 seconds
+            if self.player.hit_count >= 10:
+                if not hasattr(self, 'player_respawn_time'):
+                    self.player_respawn_time = pygame.time.get_ticks() + 5000
+                elif pygame.time.get_ticks() >= self.player_respawn_time:
+                    # Respawn player at blue spawn point
+                    blue_spawn_x = MAP_WIDTH - 200
+                    blue_spawn_y = MAP_HEIGHT - 200
+                    offset_x = random.randint(-100, 100)
+                    offset_y = random.randint(-100, 100)
+                    self.player.pos.x = max(50, min(MAP_WIDTH - 50, blue_spawn_x + offset_x))
+                    self.player.pos.y = max(50, min(MAP_HEIGHT - 50, blue_spawn_y + offset_y))
+                    self.player.rect.x = self.player.pos.x
+                    self.player.rect.y = self.player.pos.y
+                    self.player.hit_count = 0
+                    del self.player_respawn_time
+
+            # Process team respawn queue
+            now = pygame.time.get_ticks()
+            for item in self.team_respawn_queue[:]:
+                respawn_time, team, x, y = item
+                if now >= respawn_time:
+                    # Respawn with random offset
+                    offset_x = random.randint(-100, 100)
+                    offset_y = random.randint(-100, 100)
+                    spawn_x = max(50, min(MAP_WIDTH - 50, x + offset_x))
+                    spawn_y = max(50, min(MAP_HEIGHT - 50, y + offset_y))
+                    TeamAI(self, spawn_x, spawn_y, team=team, member_index=random.randint(0, 4))
+                    self.team_respawn_queue.remove(item)
+
         if self.tutorial_mode:
             self.update_tutorial()
             # Still allow building respawn in tutorial
@@ -438,8 +614,8 @@ class Game:
                             self.destroyed_building_zones.remove(zone)
             return
 
-        # Enemy Respawn Logic (use max_enemies)
-        if len(self.enemies) < self.max_enemies:
+        # Enemy Respawn Logic (use max_enemies) - SKIP IN TEAM MODE
+        if self.game_mode != 'team5v5' and len(self.enemies) < self.max_enemies:
             now = pygame.time.get_ticks()
             if now - self.last_enemy_spawn > ENEMY_RESPAWN_TIME:
                 self.last_enemy_spawn = now
@@ -472,7 +648,7 @@ class Game:
         if now - self.last_weapon_spawn > WEAPON_RESPAWN_TIME:
             self.last_weapon_spawn = now
             self.spawn_weapons()
-        
+
         # Upgrade Spawn Logic (every 5 seconds)
         if now - self.last_upgrade_spawn > 5000:  # 5 seconds
             self.last_upgrade_spawn = now
@@ -499,67 +675,85 @@ class Game:
                 drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, self.player.pos.y + offset_y))
                 WeaponItem(self, drop_x, drop_y, self.player.weapon)
             self.player.weapon = hit.type
-            self.score += 10
-        
-        # Weapon Pickup Logic - Enemies
-        for enemy in self.enemies:
-            hits = pygame.sprite.spritecollide(enemy, self.items, True)
-            for hit in hits:
-                # Drop old weapon at offset position before picking up new one
-                if enemy.weapon != 'pistol':  # Don't drop starting weapon
-                    # Drop weapon to the side with random offset
-                    offset_x = random.randint(40, 80) * random.choice([-1, 1])
-                    offset_y = random.randint(40, 80) * random.choice([-1, 1])
-                    drop_x = max(0, min(MAP_WIDTH - WEAPON_SIZE, enemy.pos.x + offset_x))
-                    drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, enemy.pos.y + offset_y))
-                    WeaponItem(self, drop_x, drop_y, enemy.weapon)
-                enemy.weapon = hit.type
-            
-            # Upgrade Pickup Logic - Enemies only
-            upgrade_hits = pygame.sprite.spritecollide(enemy, self.upgrade_items, True)
-            for upgrade in upgrade_hits:
-                # Get or create enemy index
-                if not hasattr(enemy, 'enemy_index'):
-                    enemy.enemy_index = len(self.enemies) - 1
-                
-                # Initialize upgrade storage for this enemy if needed
-                if enemy.enemy_index not in self.enemy_upgrades:
-                    self.enemy_upgrades[enemy.enemy_index] = {
-                        'fire_rate_bonus': 0,
-                        'health_pickups': 0
-                    }
-                
-                if upgrade.upgrade_type == 'fire_rate':
-                    # Reduce fire rate (faster shooting)
-                    if not hasattr(enemy, 'fire_rate_bonus'):
-                        enemy.fire_rate_bonus = 0
-                    enemy.fire_rate_bonus += 100  # 100ms faster
-                    self.enemy_upgrades[enemy.enemy_index]['fire_rate_bonus'] = enemy.fire_rate_bonus
-                elif upgrade.upgrade_type == 'enemy_count':
-                    # Increase enemy count (max 10 pickups)
-                    if self.enemy_count_pickups < 10:
-                        self.enemy_count_pickups += 1
-                        # Every 2 pickups, spawn a new enemy
-                        if self.enemy_count_pickups % 2 == 0:
-                            self.max_enemies += 1
-                            # Spawn new enemy immediately
-                            for attempt in range(100):  # Try up to 100 times
-                                # Spawn in top-left corner area
-                                x = random.randint(0, MAP_WIDTH // 4)
-                                y = random.randint(0, MAP_HEIGHT // 4)
-                                rect = pygame.Rect(x, y, ENEMY_SIZE, ENEMY_SIZE)
-                                if not any(wall.rect.colliderect(rect) for wall in self.walls):
-                                    new_enemy = Enemy(self, x, y)
-                                    new_enemy.enemy_index = self.max_enemies - 1
-                                    break
-                elif upgrade.upgrade_type == 'health':
-                    # Restore health
-                    enemy.hp = min(50, enemy.hp + 20)  # +20 HP, max 50
-                    # Track health pickups for display
-                    if not hasattr(enemy, 'health_pickups'):
-                        enemy.health_pickups = 0
-                    enemy.health_pickups += 1
-                    self.enemy_upgrades[enemy.enemy_index]['health_pickups'] = enemy.health_pickups
+            if self.game_mode != 'team5v5':
+                self.score += 10
+
+        # Weapon Pickup Logic - Team Members (in team5v5 mode)
+        if self.game_mode == 'team5v5':
+            for team_member in list(self.team_allies) + list(self.team_enemies):
+                if team_member == self.player:
+                    continue  # Player already handled above
+                hits = pygame.sprite.spritecollide(team_member, self.items, True)
+                for hit in hits:
+                    # Drop old weapon
+                    if team_member.weapon != 'pistol':
+                        offset_x = random.randint(40, 80) * random.choice([-1, 1])
+                        offset_y = random.randint(40, 80) * random.choice([-1, 1])
+                        drop_x = max(0, min(MAP_WIDTH - WEAPON_SIZE, team_member.pos.x + offset_x))
+                        drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, team_member.pos.y + offset_y))
+                        WeaponItem(self, drop_x, drop_y, team_member.weapon)
+                    team_member.weapon = hit.type
+
+        # Weapon Pickup Logic - Enemies (normal modes)
+        if self.game_mode != 'team5v5':
+            for enemy in self.enemies:
+                hits = pygame.sprite.spritecollide(enemy, self.items, True)
+                for hit in hits:
+                    # Drop old weapon at offset position before picking up new one
+                    if enemy.weapon != 'pistol':  # Don't drop starting weapon
+                        # Drop weapon to the side with random offset
+                        offset_x = random.randint(40, 80) * random.choice([-1, 1])
+                        offset_y = random.randint(40, 80) * random.choice([-1, 1])
+                        drop_x = max(0, min(MAP_WIDTH - WEAPON_SIZE, enemy.pos.x + offset_x))
+                        drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, enemy.pos.y + offset_y))
+                        WeaponItem(self, drop_x, drop_y, enemy.weapon)
+                    enemy.weapon = hit.type
+
+                # Upgrade Pickup Logic - Enemies only
+                upgrade_hits = pygame.sprite.spritecollide(enemy, self.upgrade_items, True)
+                for upgrade in upgrade_hits:
+                    # Get or create enemy index
+                    if not hasattr(enemy, 'enemy_index'):
+                        enemy.enemy_index = len(self.enemies) - 1
+
+                    # Initialize upgrade storage for this enemy if needed
+                    if enemy.enemy_index not in self.enemy_upgrades:
+                        self.enemy_upgrades[enemy.enemy_index] = {
+                            'fire_rate_bonus': 0,
+                            'health_pickups': 0
+                        }
+
+                    if upgrade.upgrade_type == 'fire_rate':
+                        # Reduce fire rate (faster shooting)
+                        if not hasattr(enemy, 'fire_rate_bonus'):
+                            enemy.fire_rate_bonus = 0
+                        enemy.fire_rate_bonus += 100  # 100ms faster
+                        self.enemy_upgrades[enemy.enemy_index]['fire_rate_bonus'] = enemy.fire_rate_bonus
+                    elif upgrade.upgrade_type == 'enemy_count':
+                        # Increase enemy count (max 10 pickups)
+                        if self.enemy_count_pickups < 10:
+                            self.enemy_count_pickups += 1
+                            # Every 2 pickups, spawn a new enemy
+                            if self.enemy_count_pickups % 2 == 0:
+                                self.max_enemies += 1
+                                # Spawn new enemy immediately
+                                for attempt in range(100):  # Try up to 100 times
+                                    # Spawn in top-left corner area
+                                    x = random.randint(0, MAP_WIDTH // 4)
+                                    y = random.randint(0, MAP_HEIGHT // 4)
+                                    rect = pygame.Rect(x, y, ENEMY_SIZE, ENEMY_SIZE)
+                                    if not any(wall.rect.colliderect(rect) for wall in self.walls):
+                                        new_enemy = Enemy(self, x, y)
+                                        new_enemy.enemy_index = self.max_enemies - 1
+                                        break
+                    elif upgrade.upgrade_type == 'health':
+                        # Restore health
+                        enemy.hp = min(50, enemy.hp + 20)  # +20 HP, max 50
+                        # Track health pickups for display
+                        if not hasattr(enemy, 'health_pickups'):
+                            enemy.health_pickups = 0
+                        enemy.health_pickups += 1
+                        self.enemy_upgrades[enemy.enemy_index]['health_pickups'] = enemy.health_pickups
         
         # Obstacle Respawn Logic
         now = pygame.time.get_ticks()
@@ -675,13 +869,37 @@ class Game:
             self.screen.blit(msg_surf, msg_rect)
         
         # HUD
-        if not self.tutorial_mode:
-            self.draw_text(f"Score: {self.score}", 10, 10)
-        self.draw_text(f"Weapon: {self.player.weapon.upper()}", 10, SCREEN_HEIGHT - 30)
-        self.draw_text(f"Hits: {self.player.hit_count}/10", 10, SCREEN_HEIGHT - 60)
-        
-        # Enemy Upgrades Display at top
-        self.draw_enemy_upgrades()
+        if self.game_mode == 'team5v5':
+            # Team mode HUD
+            # Timer (center top)
+            elapsed = pygame.time.get_ticks() - self.match_start_time
+            remaining = max(0, self.match_duration - elapsed)
+            minutes = remaining // 60000
+            seconds = (remaining % 60000) // 1000
+            timer_text = f"{minutes}:{seconds:02d}"
+            timer_surf = self.large_font.render(timer_text, True, WHITE)
+            self.screen.blit(timer_surf, (SCREEN_WIDTH // 2 - 50, 10))
+
+            # Team scores (top corners)
+            blue_score_text = f"BLAU: {self.team_blue_score}"
+            red_score_text = f"ROT: {self.team_red_score}"
+            blue_surf = self.font.render(blue_score_text, True, (50, 50, 255))
+            red_surf = self.font.render(red_score_text, True, (255, 50, 50))
+            self.screen.blit(blue_surf, (10, 10))
+            self.screen.blit(red_surf, (SCREEN_WIDTH - 150, 10))
+
+            # Weapon and hits info
+            self.draw_text(f"Weapon: {self.player.weapon.upper()}", 10, SCREEN_HEIGHT - 30)
+            self.draw_text(f"Hits: {self.player.hit_count}/10", 10, SCREEN_HEIGHT - 60)
+        else:
+            # Normal mode HUD
+            if not self.tutorial_mode:
+                self.draw_text(f"Score: {self.score}", 10, 10)
+            self.draw_text(f"Weapon: {self.player.weapon.upper()}", 10, SCREEN_HEIGHT - 30)
+            self.draw_text(f"Hits: {self.player.hit_count}/10", 10, SCREEN_HEIGHT - 60)
+
+            # Enemy Upgrades Display at top
+            self.draw_enemy_upgrades()
         
         # Mini-Map (top-right corner) - only if owned AND active
         if self.minimap_owned and self.minimap_active:
@@ -715,10 +933,24 @@ class Game:
             pygame.draw.rect(self.screen, (80, 80, 80), (scaled_x, scaled_y, scaled_w, scaled_h))
         
         # Draw enemies on mini-map
-        for enemy in self.enemies:
-            scaled_x = minimap_x + int(enemy.pos.x * scale_x)
-            scaled_y = minimap_y + int(enemy.pos.y * scale_y)
-            pygame.draw.circle(self.screen, RED, (scaled_x, scaled_y), 3)  # 3px red circles
+        if self.game_mode == 'team5v5':
+            # Draw red team (enemies)
+            for enemy in self.team_enemies:
+                scaled_x = minimap_x + int(enemy.pos.x * scale_x)
+                scaled_y = minimap_y + int(enemy.pos.y * scale_y)
+                pygame.draw.circle(self.screen, RED, (scaled_x, scaled_y), 3)
+            
+            # Draw blue team (allies) - excluding player which is drawn later
+            for ally in self.team_allies:
+                if ally != self.player:
+                    scaled_x = minimap_x + int(ally.pos.x * scale_x)
+                    scaled_y = minimap_y + int(ally.pos.y * scale_y)
+                    pygame.draw.circle(self.screen, (100, 100, 255), (scaled_x, scaled_y), 3) # Lighter blue
+        else:
+            for enemy in self.enemies:
+                scaled_x = minimap_x + int(enemy.pos.x * scale_x)
+                scaled_y = minimap_y + int(enemy.pos.y * scale_y)
+                pygame.draw.circle(self.screen, RED, (scaled_x, scaled_y), 3)  # 3px red circles
         
         # Draw player on mini-map
         player_scaled_x = minimap_x + int(self.player.pos.x * scale_x)
@@ -771,27 +1003,28 @@ class Game:
             self.menu_music.play(-1)  # -1 = Endlosschleife
             print("[OK] Menue-Musik gestartet (laeuft in Dauerschleife)")
         
-        # Define buttons - 5 main buttons + start (compact layout)
+        # Define buttons - 6 main buttons + start (compact layout)
         button_width = 250
         button_height = 45  # Back to 45
         button_spacing = 15  # Back to 15
-        
+
         # Center buttons horizontally, start higher up
         buttons_x = SCREEN_WIDTH // 2 - button_width // 2
-        buttons_start_y = SCREEN_HEIGHT // 2 - 40  # Adjusted for 5 buttons
-        
-        # Five main buttons
-        enemy_button = pygame.Rect(buttons_x, buttons_start_y, button_width, button_height)
-        ai_aim_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing), button_width, button_height)
-        ai_dodge_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 2, button_width, button_height)
-        shop_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 3, button_width, button_height)
-        multiplayer_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 4, button_width, button_height)
-        
+        buttons_start_y = SCREEN_HEIGHT // 2 - 70  # Adjusted for 6 buttons
+
+        # Six main buttons
+        game_mode_button = pygame.Rect(buttons_x, buttons_start_y, button_width, button_height)
+        enemy_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing), button_width, button_height)
+        ai_aim_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 2, button_width, button_height)
+        ai_dodge_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 3, button_width, button_height)
+        shop_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 4, button_width, button_height)
+        multiplayer_button = pygame.Rect(buttons_x, buttons_start_y + (button_height + button_spacing) * 5, button_width, button_height)
+
         # Tutorial button (Top Left Corner)
         tutorial_button = pygame.Rect(20, 20, 200, 40)
-        
+
         # Start button (centered below, compact)
-        start_button = pygame.Rect(SCREEN_WIDTH // 2 - 140, buttons_start_y + (button_height + button_spacing) * 5 + 15, 280, 55)
+        start_button = pygame.Rect(SCREEN_WIDTH // 2 - 140, buttons_start_y + (button_height + button_spacing) * 6 + 15, 280, 55)
         
         while True:
             self.screen.fill(DARK_GREY)
@@ -809,9 +1042,18 @@ class Game:
             pygame.draw.rect(self.screen, (255, 215, 0), box_rect, 3)
             self.screen.blit(total_score_text, total_score_rect)
             
-            # Current enemy count
-            self.draw_text(f"Anzahl Gegner: {self.max_enemies}", SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT // 2 - 60)
-            
+            # Game Mode button
+            mode_names = {'classic': 'Klassisch', 'survival': 'Überlebens-Modus', 'team5v5': '5vs5 Team'}
+            mode_colors = {'classic': (100, 200, 100), 'survival': (255, 100, 50), 'team5v5': (100, 100, 255)}
+            current_mode_name = mode_names[self.game_mode]
+            current_mode_color = mode_colors[self.game_mode]
+
+            pygame.draw.rect(self.screen, current_mode_color, game_mode_button)
+            pygame.draw.rect(self.screen, WHITE, game_mode_button, 3)
+            mode_text = self.medium_font.render(f"Modus: {current_mode_name}", True, WHITE)
+            mode_text_rect = mode_text.get_rect(center=game_mode_button.center)
+            self.screen.blit(mode_text, mode_text_rect)
+
             # Enemy count button
             pygame.draw.rect(self.screen, LIGHT_GREY, enemy_button)
             pygame.draw.rect(self.screen, WHITE, enemy_button, 3)
@@ -875,7 +1117,16 @@ class Game:
                     pygame.quit()
                     sys.exit()
                 if event.type == pygame.MOUSEBUTTONUP:
-                    if enemy_button.collidepoint(event.pos):
+                    if game_mode_button.collidepoint(event.pos):
+                        # Cycle through: classic -> survival -> team5v5 -> classic
+                        if self.game_mode == 'classic':
+                            self.game_mode = 'survival'
+                        elif self.game_mode == 'survival':
+                            self.game_mode = 'team5v5'
+                        else:
+                            self.game_mode = 'classic'
+                        self.save_total_score()  # Save the setting
+                    elif enemy_button.collidepoint(event.pos):
                         self.max_enemies = self.max_enemies + 1 if self.max_enemies < 20 else 1
                     elif ai_aim_button.collidepoint(event.pos):
                         # Cycle through difficulties: easy -> normal -> hard -> hardcore -> easy
@@ -1130,8 +1381,8 @@ class Game:
         self.weapon_upgrades = self.saved_weapon_upgrades
         client.close()
     
-    def run_multiplayer_match(self, client, is_host):
-        """Run multiplayer match with network sync"""
+    def setup_multiplayer_round(self, is_host):
+        """Initialize multiplayer round with fair spawning"""
         from sprites import NetworkPlayer
         
         # Initialize game world
@@ -1146,145 +1397,264 @@ class Game:
         self.obstacle_respawn_queue = []
         self.tutorial_mode = False
         
-        # Create local player
-        self.player = Player(self, MAP_WIDTH - 100 if is_host else 100, MAP_HEIGHT - 100 if is_host else 100)
+        # Create players
+        # Host: Bottom-Right, Client: Top-Left
+        p1_x = MAP_WIDTH - 100 if is_host else 100
+        p1_y = MAP_HEIGHT - 100 if is_host else 100
+        self.player = Player(self, p1_x, p1_y)
         
-        # Create remote player
-        self.network_player = NetworkPlayer(self, 100 if is_host else MAP_WIDTH - 100, 100 if is_host else MAP_HEIGHT - 100)
+        p2_x = 100 if is_host else MAP_WIDTH - 100
+        p2_y = 100 if is_host else MAP_HEIGHT - 100
+        self.network_player = NetworkPlayer(self, p2_x, p2_y)
         
-        # Create obstacles
-        for _ in range(20):
+        # Create obstacles (Fair Spawning)
+        count = 0
+        attempts = 0
+        while count < 20 and attempts < 1000:
+            attempts += 1
             x = random.randint(0, MAP_WIDTH - 100)
             y = random.randint(0, MAP_HEIGHT - 100)
             w = random.randint(50, 200)
             h = random.randint(50, 200)
+            rect = pygame.Rect(x, y, w, h)
+            
+            # Check distance to players (Safe Zone 300px)
+            # Use center of obstacle for distance check
+            obs_center = vec(x + w/2, y + h/2)
+            if (obs_center - self.player.pos).length() < 300 or \
+               (obs_center - self.network_player.pos).length() < 300:
+                continue
+            
+            # Check overlap with existing walls
+            if any(wall.rect.colliderect(rect) for wall in self.walls):
+                continue
+                
             Obstacle(self, x, y, w, h)
+            count += 1
         
         # Spawn weapons
         self.spawn_weapons()
         
         self.score = 0
         self.playing = True
-        last_sync = pygame.time.get_ticks()
-        
-        # Game loop
-        while self.playing and client.connected:
-            self.dt = self.clock.tick(FPS) / 1000
-            
-            # Handle events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.playing = False
-            
-            # Update local player
-            self.player.get_keys()
-            self.player.pos += self.player.vel * self.dt
-            self.player.rect.x = self.player.pos.x
-            self.player.collide_with_walls('x')
-            self.player.rect.y = self.player.pos.y
-            self.player.collide_with_walls('y')
-            
-            # Boundary checks
-            self.player.pos.x = max(0, min(MAP_WIDTH - PLAYER_SIZE, self.player.pos.x))
-            self.player.pos.y = max(0, min(MAP_HEIGHT - PLAYER_SIZE, self.player.pos.y))
-            self.player.rect.x = self.player.pos.x
-            self.player.rect.y = self.player.pos.y
-            
-            # Send state to network (10 times per second)
-            now = pygame.time.get_ticks()
-            if now - last_sync > 100:
-                client.send({'type': 'state', 'x': self.player.pos.x, 'y': self.player.pos.y, 
-                           'weapon': self.player.weapon, 'hits': self.player.hit_count})
-                last_sync = now
-            
-            # Receive network updates
-            for msg in client.get_messages():
-                if msg.get('type') == 'state':
-                    self.network_player.update_from_network(msg)
-                elif msg.get('type') == 'shoot':
-                    # Remote player shot
-                    data = msg['data']
-                    from sprites import Projectile, Grenade
-                    
-                    # Recreate spread/count based on weapon stats
-                    weapon_stats = WEAPONS[data['weapon']]
-                    dir = vec(data['dx'], data['dy'])
-                    
-                    for _ in range(weapon_stats['count']):
-                        spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
-                        vel = dir.rotate(spread)
-                        
-                        if data['weapon'] == 'grenade':
-                            Grenade(self, data['x'], data['y'], vel.x, vel.y, 'enemy',
-                                   data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
-                        else:
-                            Projectile(self, data['x'], data['y'], vel.x, vel.y, 'enemy',
-                                     data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
-                
-                elif msg.get('type') == 'shoot_building':
-                    # Remote player shot at building
-                    data = msg['data']
-                    from sprites import BuildingProjectile
-                    
-                    weapon_stats = WEAPONS[data['weapon']]
-                    dir = vec(data['dx'], data['dy'])
-                    
-                    for _ in range(weapon_stats['count']):
-                        spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
-                        vel = dir.rotate(spread)
-                        BuildingProjectile(self, data['x'], data['y'], vel.x, vel.y,
-                                         data['damage'], data['speed'], data['lifetime'], (255, 165, 0))
 
-                elif msg.get('type') == 'destroy_wall':
-                    # Destroy specific wall
-                    x, y = msg['x'], msg['y']
-                    # Find obstacle at original coordinates
-                    for wall in self.walls:
-                        if hasattr(wall, 'original_x') and wall.original_x == x and wall.original_y == y:
-                            # Force kill without sending another event
-                            # But wait, take_damage calls kill().
-                            # If we just kill() it, it won't respawn?
-                            # take_damage triggers respawn schedule.
-                            # So we should manually schedule respawn and kill.
-                            if hasattr(wall, 'game'):
-                                wall.game.schedule_obstacle_respawn(wall.original_x, wall.original_y, 
-                                                                  wall.original_w, wall.original_h)
-                            wall.kill()
-                            break
-            
-            # Update sprites
-            self.all_sprites.update()
-            
-            # Weapon pickups for local player
-            hits = pygame.sprite.spritecollide(self.player, self.items, True)
-            for hit in hits:
-                if self.player.weapon != 'pistol':
-                    offset_x = random.randint(40, 80) * random.choice([-1, 1])
-                    offset_y = random.randint(40, 80) * random.choice([-1, 1])
-                    drop_x = max(0, min(MAP_WIDTH - WEAPON_SIZE, self.player.pos.x + offset_x))
-                    drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, self.player.pos.y + offset_y))
-                    WeaponItem(self, drop_x, drop_y, self.player.weapon)
-                self.player.weapon = hit.type
-                client.send({'type': 'weapon', 'weapon': hit.type})
-            
-            # Check game over
-            if self.player.hit_count >= 10:
-                self.show_message_box("NIEDERLAGE", "Du wurdest besiegt!")
-                self.playing = False
-            elif self.network_player.hit_count >= 10:
-                self.show_message_box("SIEG", "Du hast gewonnen!")
-                self.playing = False
-            
-            # Draw
+    def show_multiplayer_game_over(self, winner, client, is_host):
+        """Show multiplayer game over screen with rematch option"""
+        rematch_btn = pygame.Rect(SCREEN_WIDTH // 2 - 150, SCREEN_HEIGHT // 2 + 50, 300, 60)
+        menu_btn = pygame.Rect(SCREEN_WIDTH // 2 - 150, SCREEN_HEIGHT // 2 + 130, 300, 60)
+        
+        # Send waiting flag to clean up previous messages?
+        # Maybe just wait for input.
+        
+        waiting = True
+        while waiting and client.connected:
+            self.screen.fill(0) # Black screen or transparent overlay?
+            # Draw game behind it (optional, but need to pass 'draw' first)
+            # Just fill dark grey
             self.screen.fill(DARK_GREY)
-            self.all_sprites.custom_draw(self.player)
             
-            # HUD
-            self.draw_text(f"Deine Treffer: {self.player.hit_count}/10", 10, 10)
-            self.draw_text(f"Gegner Treffer: {self.network_player.hit_count}/10", 10, 40)
-            self.draw_text(f"Waffe: {self.player.weapon.upper()}", 10, SCREEN_HEIGHT - 30)
+            # Result Text
+            if (winner == "Host" and is_host) or (winner == "Client" and not is_host):
+                title = "SIEG!"
+                color = (100, 255, 100)
+            else:
+                title = "NIEDERLAGE"
+                color = (255, 100, 100)
+            
+            title_surf = self.large_font.render(title, True, color)
+            self.screen.blit(title_surf, (SCREEN_WIDTH // 2 - title_surf.get_width() // 2, 150))
+            
+            stats_text = f"Mein Treffer: {self.player.hit_count} | Gegner Treffer: {self.network_player.hit_count}"
+            s_surf = self.font.render(stats_text, True, WHITE)
+            self.screen.blit(s_surf, (SCREEN_WIDTH // 2 - s_surf.get_width() // 2, 250))
+            
+            # Buttons
+            pygame.draw.rect(self.screen, (50, 150, 255), rematch_btn)
+            pygame.draw.rect(self.screen, WHITE, rematch_btn, 3)
+            r_text = self.medium_font.render("REVANCHE", True, WHITE)
+            self.screen.blit(r_text, r_text.get_rect(center=rematch_btn.center))
+            
+            pygame.draw.rect(self.screen, (150, 50, 50), menu_btn)
+            pygame.draw.rect(self.screen, WHITE, menu_btn, 3)
+            m_text = self.medium_font.render("MENÜ", True, WHITE)
+            self.screen.blit(m_text, m_text.get_rect(center=menu_btn.center))
             
             pygame.display.flip()
+            
+            # Events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return 'menu'
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if rematch_btn.collidepoint(event.pos):
+                        client.send({'type': 'rematch'})
+                        return 'rematch'
+                    if menu_btn.collidepoint(event.pos):
+                        return 'menu'
+            
+            # Network Messages
+            for msg in client.get_messages():
+                if msg.get('type') == 'rematch':
+                    # Opponent wants rematch
+                    # We can auto-accept or show "Opponent wants rematch"
+                    # For simplicity: If ANYONE clicks rematch, we accept.
+                    return 'rematch'
+                if msg.get('type') == 'left':
+                    return 'menu'
+
+        return 'menu'
+
+    def run_multiplayer_match(self, client, is_host):
+        """Run multiplayer match with network sync"""
+        from sprites import NetworkPlayer
+        
+        while client.connected:
+            # 1. Setup Round
+            self.setup_multiplayer_round(is_host)
+            
+            last_sync = pygame.time.get_ticks()
+            winner = None
+            
+            # 2. Game Loop
+            while self.playing and client.connected:
+                self.dt = self.clock.tick(FPS) / 1000
+                
+                # Handle events
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        self.playing = False
+                        client.close()
+                        return
+                
+                # Update local player
+                self.player.get_keys()
+                self.player.pos += self.player.vel * self.dt
+                self.player.rect.x = self.player.pos.x
+                self.player.collide_with_walls('x')
+                self.player.rect.y = self.player.pos.y
+                self.player.collide_with_walls('y')
+                
+                # Boundary checks
+                self.player.pos.x = max(0, min(MAP_WIDTH - PLAYER_SIZE, self.player.pos.x))
+                self.player.pos.y = max(0, min(MAP_HEIGHT - PLAYER_SIZE, self.player.pos.y))
+                self.player.rect.x = self.player.pos.x
+                self.player.rect.y = self.player.pos.y
+                
+                # Send state to network (10 times per second)
+                now = pygame.time.get_ticks()
+                if now - last_sync > 100:
+                    client.send({'type': 'state', 'x': self.player.pos.x, 'y': self.player.pos.y, 
+                               'weapon': self.player.weapon, 'hits': self.player.hit_count})
+                    last_sync = now
+                
+                # Receive network updates
+                for msg in client.get_messages():
+                    if msg.get('type') == 'state':
+                        self.network_player.update_from_network(msg)
+                    elif msg.get('type') == 'shoot':
+                        # Remote player shot
+                        data = msg['data']
+                        from sprites import Projectile, Grenade
+                        
+                        # Recreate spread/count based on weapon stats
+                        weapon_stats = WEAPONS[data['weapon']]
+                        dir = vec(data['dx'], data['dy'])
+                        
+                        for _ in range(weapon_stats['count']):
+                            spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
+                            vel = dir.rotate(spread)
+                            
+                            if data['weapon'] == 'grenade':
+                                Grenade(self, data['x'], data['y'], vel.x, vel.y, 'enemy',
+                                       data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
+                            else:
+                                Projectile(self, data['x'], data['y'], vel.x, vel.y, 'enemy',
+                                         data['damage'], data['speed'], data['lifetime'], (255, 50, 50), False)
+                    
+                    elif msg.get('type') == 'shoot_building':
+                        # Remote player shot at building
+                        data = msg['data']
+                        from sprites import BuildingProjectile
+                        
+                        weapon_stats = WEAPONS[data['weapon']]
+                        dir = vec(data['dx'], data['dy'])
+                        
+                        for _ in range(weapon_stats['count']):
+                            spread = random.uniform(-weapon_stats['spread'], weapon_stats['spread'])
+                            vel = dir.rotate(spread)
+                            BuildingProjectile(self, data['x'], data['y'], vel.x, vel.y,
+                                             data['damage'], data['speed'], data['lifetime'], (255, 165, 0))
+
+                    elif msg.get('type') == 'destroy_wall':
+                        # Destroy specific wall
+                        x, y = msg['x'], msg['y']
+                        # Find obstacle at original coordinates
+                        for wall in self.walls:
+                            if hasattr(wall, 'original_x') and wall.original_x == x and wall.original_y == y:
+                                if hasattr(wall, 'game'):
+                                    wall.game.schedule_obstacle_respawn(wall.original_x, wall.original_y, 
+                                                                      wall.original_w, wall.original_h)
+                                wall.kill()
+                                break
+                    
+                    elif msg.get('type') == 'left':
+                         # Opponent left
+                         self.show_message_box("Info", "Gegner hat das Spiel verlassen.")
+                         self.playing = False
+                         client.close()
+                         return
+
+                # Update sprites
+                self.all_sprites.update()
+                
+                # Weapon pickups for local player
+                hits = pygame.sprite.spritecollide(self.player, self.items, True)
+                for hit in hits:
+                    if self.player.weapon != 'pistol':
+                        offset_x = random.randint(40, 80) * random.choice([-1, 1])
+                        offset_y = random.randint(40, 80) * random.choice([-1, 1])
+                        drop_x = max(0, min(MAP_WIDTH - WEAPON_SIZE, self.player.pos.x + offset_x))
+                        drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, self.player.pos.y + offset_y))
+                        WeaponItem(self, drop_x, drop_y, self.player.weapon)
+                    self.player.weapon = hit.type
+                    client.send({'type': 'weapon', 'weapon': hit.type})
+                
+                # Check game over
+                if self.player.hit_count >= 10:
+                    winner = "Client" if is_host else "Host"
+                    self.playing = False
+                elif self.network_player.hit_count >= 10:
+                    winner = "Host" if is_host else "Client"
+                    self.playing = False
+                
+                # Draw
+                self.screen.fill(DARK_GREY)
+                self.all_sprites.custom_draw(self.player)
+                
+                # HUD
+                self.draw_text(f"Deine Treffer: {self.player.hit_count}/10", 10, 10)
+                self.draw_text(f"Gegner Treffer: {self.network_player.hit_count}/10", 10, 40)
+                self.draw_text(f"Waffe: {self.player.weapon.upper()}", 10, SCREEN_HEIGHT - 30)
+                
+                pygame.display.flip()
+            
+            # End of Round
+            if not client.connected:
+                break
+                
+            # If we exited due to QUIT event, return
+            if not self.playing and winner is None:
+                 # Check if it was because of opponent leaving (handled in loop) or manual quit
+                 # If manual quit, we would have returned already
+                 pass
+            
+            # Show Game Over Screen
+            action = self.show_multiplayer_game_over(winner, client, is_host)
+            if action == 'menu':
+                break
+            # if 'rematch', loop continues
+            
+        client.close()
 
 
     def show_unified_shop(self):
@@ -2404,16 +2774,45 @@ class Game:
 
 
     def show_go_screen(self):
-        # Add current game score to total score
-        self.total_score += self.score
-        self.save_total_score()
-        
         # Game over screen with 3 second auto-return
         self.screen.fill(DARK_GREY)
-        self.draw_text("GAME OVER", SCREEN_WIDTH // 2 - 60, SCREEN_HEIGHT // 2 - 80)
-        self.draw_text(f"Erreichte Punkte: {self.score}", SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT // 2 - 20)
-        self.draw_text(f"Neue Gesamtpunkte: {self.total_score:,}", SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 + 20)
-        self.draw_text("Zurück zum Startbildschirm...", SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT // 2 + 70)
+
+        if self.game_mode == 'team5v5':
+            # Team mode game over screen
+            if self.team_blue_score > self.team_red_score:
+                winner_text = "TEAM BLAU GEWINNT!"
+                winner_color = (50, 50, 255)
+            elif self.team_red_score > self.team_blue_score:
+                winner_text = "TEAM ROT GEWINNT!"
+                winner_color = (255, 50, 50)
+            else:
+                winner_text = "UNENTSCHIEDEN!"
+                winner_color = (255, 255, 0)
+
+            # Display winner
+            winner_surf = self.large_font.render(winner_text, True, winner_color)
+            self.screen.blit(winner_surf, (SCREEN_WIDTH // 2 - 150, SCREEN_HEIGHT // 2 - 80))
+
+            # Display final scores
+            self.draw_text(f"Team Blau: {self.team_blue_score} Punkte", SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 - 20, (50, 50, 255))
+            self.draw_text(f"Team Rot: {self.team_red_score} Punkte", SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 + 20, (255, 50, 50))
+
+            # Add winning team score to total score
+            if self.team_blue_score > self.team_red_score:
+                self.total_score += self.team_blue_score
+                self.save_total_score()
+                self.draw_text(f"Neue Gesamtpunkte: {self.total_score:,}", SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT // 2 + 60, (255, 215, 0))
+        else:
+            # Normal mode game over screen
+            # Add current game score to total score
+            self.total_score += self.score
+            self.save_total_score()
+
+            self.draw_text("GAME OVER", SCREEN_WIDTH // 2 - 60, SCREEN_HEIGHT // 2 - 80)
+            self.draw_text(f"Erreichte Punkte: {self.score}", SCREEN_WIDTH // 2 - 80, SCREEN_HEIGHT // 2 - 20)
+            self.draw_text(f"Neue Gesamtpunkte: {self.total_score:,}", SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT // 2 + 20)
+
+        self.draw_text("Zurück zum Startbildschirm...", SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT // 2 + 110)
         pygame.display.flip()
         
         # Wait 3 seconds or quit
@@ -2621,6 +3020,9 @@ class Game:
                     # Load tutorial completion
                     if 'tutorial_completed' in data:
                         self.saved_tutorial_completed = data.get('tutorial_completed', False)
+                    # Load game mode
+                    if 'game_mode' in data:
+                        self.saved_game_mode = data.get('game_mode', 'classic')
                     return data.get('total_score', 0)
         except Exception as e:
             print(f"Error loading score: {e}")
@@ -2644,7 +3046,8 @@ class Game:
                     'minimap_active': self.minimap_active,
                     'ai_aim_difficulty': self.ai_aim_difficulty,
                     'ai_dodge_difficulty': self.ai_dodge_difficulty,
-                    'tutorial_completed': self.tutorial_completed
+                    'tutorial_completed': self.tutorial_completed,
+                    'game_mode': self.game_mode
                 }, f)
         except Exception as e:
             print(f"Error saving score: {e}")
