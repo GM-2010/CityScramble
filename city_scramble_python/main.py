@@ -58,9 +58,20 @@ class Game:
         self.tutorial_completed = self.data_manager.get('tutorial_completed', False)
         self.sounds_owned = self.data_manager.get('sounds_owned', False)
         self.sounds_active = self.data_manager.get('sounds_active', False)
+        self.owned_designs = self.data_manager.get('owned_designs', ['classic'])
+        self.selected_design = self.data_manager.get('selected_design', 'classic')
         
         self.special_minimap_cost = 1000000
         self.special_sounds_cost = 1000000
+        self.special_design_cost = 1000000
+        
+        # Design configuration
+        self.designs = {
+            'classic': {'name': 'Klassisch', 'img': None, 'color': DARK_GREY},
+            'desert': {'name': 'Wüste', 'img': 'sand.webp', 'color': (235, 215, 175)},
+            'grass': {'name': 'Wiese', 'img': 'grass.png', 'color': (50, 150, 50)},
+            'winter': {'name': 'Winter', 'img': 'snow.png', 'color': (200, 230, 255)}
+        }
         
         # Weapon upgrade system (only for player)
         self.weapon_upgrades = {
@@ -163,7 +174,7 @@ class Game:
         self.tutorial_target_pos = None
         self.tutorial_message = ""
         
-        self.all_sprites = CameraGroup()  # Use CameraGroup
+        self.all_sprites = CameraGroup(self)  # Use CameraGroup
         self.walls = pygame.sprite.Group()
         self.projectiles = pygame.sprite.Group()
         self.enemies = pygame.sprite.Group()
@@ -1252,6 +1263,8 @@ class Game:
         self.data_manager.set('game_mode', self.game_mode)
         self.data_manager.set('sounds_owned', self.sounds_owned)
         self.data_manager.set('sounds_active', self.sounds_active)
+        self.data_manager.set('owned_designs', self.owned_designs)
+        self.data_manager.set('selected_design', self.selected_design)
         
         self.data_manager.save()
     

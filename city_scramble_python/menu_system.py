@@ -1256,8 +1256,9 @@ class MenuManager:
     def show_special_shop(self):
         """Shop for special items like Minimap and Sounds"""
         back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
-        buy_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 180, 300, 60)
-        buy_sounds_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 300, 300, 60)
+        buy_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 150, 300, 50)
+        buy_sounds_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 230, 300, 50)
+        buy_designs_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 310, 300, 50)
         
         message = ""
         message_color = WHITE
@@ -1308,10 +1309,20 @@ class MenuManager:
 
             # Descriptions
             map_desc = self.medium_font.render("Zeigt Gegner auf einem Radar an", True, WHITE)
-            self.screen.blit(map_desc, (SCREEN_WIDTH // 2 - 180, 245))
+            self.screen.blit(map_desc, (SCREEN_WIDTH // 2 - 180, 205))
             
             sound_desc = self.medium_font.render("Schaltet Musik und Effekte frei", True, WHITE)
-            self.screen.blit(sound_desc, (SCREEN_WIDTH // 2 - 180, 365))
+            self.screen.blit(sound_desc, (SCREEN_WIDTH // 2 - 180, 285))
+
+            # Designs Button
+            pygame.draw.rect(self.screen, (200, 200, 50), buy_designs_button)
+            pygame.draw.rect(self.screen, WHITE, buy_designs_button, 3)
+            text = self.font.render("Designs kaufen", True, WHITE)
+            text_rect = text.get_rect(center=buy_designs_button.center)
+            self.screen.blit(text, text_rect)
+            
+            design_desc = self.medium_font.render("Andere Spielwelten freischalten", True, WHITE)
+            self.screen.blit(design_desc, (SCREEN_WIDTH // 2 - 180, 365))
             
             # Back button
             pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
@@ -1354,12 +1365,16 @@ class MenuManager:
                         else:
                             message = "Nicht genug Punkte!"
                             message_color = (255, 100, 100)
+                    
+                    if buy_designs_button.collidepoint(event.pos):
+                        self.show_design_shop()
 
     def show_special_wardrobe(self):
         """Wardrobe for toggling special items"""
         back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
-        toggle_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 180, 300, 60)
-        toggle_sounds_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 260, 300, 60)
+        toggle_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 150, 300, 50)
+        toggle_sounds_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 230, 300, 50)
+        select_design_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 310, 300, 50)
         
         message = ""
         message_color = WHITE
@@ -1406,6 +1421,13 @@ class MenuManager:
                 text = self.font.render("Sounds nicht im Besitz", True, (200, 200, 200))
                 text_rect = text.get_rect(center=toggle_sounds_button.center)
                 self.screen.blit(text, text_rect)
+
+            # Designs Button
+            pygame.draw.rect(self.screen, (200, 200, 50), select_design_button)
+            pygame.draw.rect(self.screen, WHITE, select_design_button, 3)
+            text = self.font.render("Designs auswählen", True, WHITE)
+            text_rect = text.get_rect(center=select_design_button.center)
+            self.screen.blit(text, text_rect)
             
             # Back button
             pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
@@ -1432,6 +1454,135 @@ class MenuManager:
                             self.game.menu_music.play(-1)
                         elif not self.game.sounds_active and self.game.menu_music_loaded:
                             self.game.menu_music.stop()
+                    
+                    if select_design_button.collidepoint(event.pos):
+                        self.show_design_wardrobe()
+
+    def show_design_shop(self):
+        """Shop to buy different world designs"""
+        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
+        
+        # Grid setup for designs
+        design_ids = ['desert', 'grass', 'winter']
+        button_width = 300
+        button_height = 80
+        start_y = 180
+        spacing = 100
+        
+        message = ""
+        message_color = WHITE
+        
+        while True:
+            self.screen.fill(DARK_GREY)
+            title = self.large_font.render("DESIGN-SHOP", True, (200, 200, 50))
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - 150, 50))
+            self.draw_text(f"Punkte: {self.game.total_score:,}", SCREEN_WIDTH // 2 - 80, 120)
+            
+            buttons = []
+            for i, d_id in enumerate(design_ids):
+                rect = pygame.Rect(SCREEN_WIDTH // 2 - 150, start_y + i * spacing, button_width, button_height)
+                buttons.append((rect, d_id))
+                
+                owned = d_id in self.game.owned_designs
+                name = self.game.designs[d_id]['name']
+                cost = self.game.special_design_cost
+                
+                if owned:
+                    color = (100, 255, 100)
+                    btn_text = f"{name} (Gekauft)"
+                else:
+                    can_afford = self.game.total_score >= cost
+                    color = (255, 150, 50) if can_afford else (100, 100, 100)
+                    btn_text = f"{name} ({cost:,})"
+                
+                pygame.draw.rect(self.screen, color, rect)
+                pygame.draw.rect(self.screen, WHITE, rect, 3)
+                txt = self.font.render(btn_text, True, BLACK if owned else WHITE)
+                txt_rect = txt.get_rect(center=rect.center)
+                self.screen.blit(txt, txt_rect)
+
+            pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
+            pygame.draw.rect(self.screen, WHITE, back_button, 2)
+            self.draw_text("Zurück", back_button.x + 60, back_button.y + 10)
+            
+            if message:
+                self.draw_text(message, SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT - 130, message_color)
+                
+            pygame.display.flip()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if back_button.collidepoint(event.pos): return
+                    for rect, d_id in buttons:
+                        if rect.collidepoint(event.pos) and d_id not in self.game.owned_designs:
+                            if self.game.total_score >= self.game.special_design_cost:
+                                self.game.total_score -= self.game.special_design_cost
+                                self.game.owned_designs.append(d_id)
+                                self.game.save_total_score()
+                                message = "Design gekauft!"
+                                message_color = (100, 255, 100)
+                            else:
+                                message = "Zu wenig Punkte!"
+                                message_color = (255, 100, 100)
+
+    def show_design_wardrobe(self):
+        """Wardrobe to select world designs"""
+        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
+        design_ids = ['classic', 'desert', 'grass', 'winter']
+        button_width = 300
+        button_height = 60
+        start_y = 150
+        spacing = 80
+        
+        while True:
+            self.screen.fill(DARK_GREY)
+            title = self.large_font.render("WELT-DESIGNS", True, (200, 200, 50))
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - 150, 50))
+            
+            buttons = []
+            for i, d_id in enumerate(design_ids):
+                rect = pygame.Rect(SCREEN_WIDTH // 2 - 150, start_y + i * spacing, button_width, button_height)
+                buttons.append((rect, d_id))
+                
+                owned = d_id in self.game.owned_designs
+                active = self.game.selected_design == d_id
+                name = self.game.designs[d_id]['name']
+                
+                if not owned:
+                    color = (50, 50, 50)
+                    btn_text = f"{name} (Nicht im Besitz)"
+                    txt_color = (150, 150, 150)
+                elif active:
+                    color = (100, 255, 100)
+                    btn_text = f"{name} (AKTIV)"
+                    txt_color = BLACK
+                else:
+                    color = (100, 100, 100)
+                    btn_text = name
+                    txt_color = WHITE
+                
+                pygame.draw.rect(self.screen, color, rect)
+                pygame.draw.rect(self.screen, WHITE, rect, 3)
+                txt = self.font.render(btn_text, True, txt_color)
+                txt_rect = txt.get_rect(center=rect.center)
+                self.screen.blit(txt, txt_rect)
+
+            pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
+            pygame.draw.rect(self.screen, WHITE, back_button, 2)
+            self.draw_text("Zurück", back_button.x + 60, back_button.y + 10)
+            
+            pygame.display.flip()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if back_button.collidepoint(event.pos): return
+                    for rect, d_id in buttons:
+                        if rect.collidepoint(event.pos) and d_id in self.game.owned_designs:
+                            self.game.selected_design = d_id
+                            self.game.save_total_score()
+                            # Ground texture is re-loaded when starting a new game (CameraGroup init)
 
     def show_go_screen(self):
         """Game Over screen"""

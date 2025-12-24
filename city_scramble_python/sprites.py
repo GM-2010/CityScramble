@@ -5,8 +5,9 @@ from settings import *
 vec = pygame.math.Vector2
 
 class CameraGroup(pygame.sprite.Group):
-    def __init__(self):
+    def __init__(self, game):
         super().__init__()
+        self.game = game
         self.display_surface = pygame.display.get_surface()
         self.offset = vec()
         self.half_w = self.display_surface.get_size()[0] // 2
@@ -15,16 +16,28 @@ class CameraGroup(pygame.sprite.Group):
         # Create a map surface (optional, but good for performance if static)
         self.ground_surf = pygame.Surface((MAP_WIDTH, MAP_HEIGHT))
         
-        # Load sand texture
-        try:
-            sand_img = pygame.image.load("sand.webp").convert()
-            # Tile the texture
-            for x in range(0, MAP_WIDTH, sand_img.get_width()):
-                for y in range(0, MAP_HEIGHT, sand_img.get_height()):
-                    self.ground_surf.blit(sand_img, (x, y))
-        except Exception as e:
-            print(f"Could not load sand.webp: {e}")
-            self.ground_surf.fill((235, 215, 175)) # Fallback SAND color
+        # Load texture based on selected design
+        design_id = game.selected_design
+        design_info = game.designs.get(design_id, game.designs['classic'])
+        img_file = design_info['img']
+        fallback_color = design_info['color']
+        
+        if img_file:
+            try:
+                import os
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                file_path = os.path.join(script_dir, img_file)
+                ground_img = pygame.image.load(file_path).convert()
+                # Tile the texture
+                for x in range(0, MAP_WIDTH, ground_img.get_width()):
+                    for y in range(0, MAP_HEIGHT, ground_img.get_height()):
+                        self.ground_surf.blit(ground_img, (x, y))
+                print(f"[OK] Design-Textur '{file_path}' erfolgreich geladen")
+            except Exception as e:
+                print(f"[FEHLER] Konnte {img_file} nicht laden: {e}")
+                self.ground_surf.fill(fallback_color)
+        else:
+            self.ground_surf.fill(fallback_color)
             
         self.ground_rect = self.ground_surf.get_rect(topleft=(0, 0))
 
@@ -222,11 +235,14 @@ class Obstacle(pygame.sprite.Sprite):
         
         # Load and scale house image
         try:
-            house_img = pygame.image.load("haus.jpg").convert()
+            import os
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            house_path = os.path.join(script_dir, "haus.jpg")
+            house_img = pygame.image.load(house_path).convert()
             self.original_image = pygame.transform.scale(house_img, (w, h))
             self.image.blit(self.original_image, (0, 0))
         except Exception as e:
-            print(f"Could not load haus.jpg: {e}")
+            print(f"[FEHLER] Konnte haus.jpg nicht laden: {e}")
             self.image.fill(SANDSTONE)
             self.original_image = self.image.copy()
 
