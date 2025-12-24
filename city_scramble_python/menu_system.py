@@ -1043,6 +1043,10 @@ class MenuManager:
                     
                     # Check color button clicks
                     for color_id, button_rect in color_buttons.items():
+                        if button_rect.collidepoint(event.pos):
+                            self.game.selected_bullet_color = color_id
+                            self.game.save_total_score()
+                            color_name = self.game.bullet_colors[color_id]['name']
                             message = f"Farbe gewählt: {color_name}"
                             message_color = (100, 255, 100)
                             break
