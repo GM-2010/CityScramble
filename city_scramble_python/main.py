@@ -180,6 +180,8 @@ class Game:
         self.enemies = pygame.sprite.Group()
         self.items = pygame.sprite.Group()
         self.upgrade_items = pygame.sprite.Group()  # For AI upgrades
+        self.civilians = pygame.sprite.Group()  # Peaceful civilians
+        self.uprising_civilians = pygame.sprite.Group()  # Angry civilians from uprising
 
         # Team mode groups
         self.team_allies = pygame.sprite.Group()  # Blue team (player + 4 AI)
@@ -324,6 +326,10 @@ class Game:
         if not self.tutorial_mode:
             self.spawn_weapons()
 
+        # Spawn civilians - SKIP IN TUTORIAL AND TEAM MODE
+        if not self.tutorial_mode and self.game_mode != 'team5v5':
+            self.spawn_civilians()
+
         self.score = 0
         self.start_time = pygame.time.get_ticks()
         self.last_enemy_spawn = pygame.time.get_ticks()
@@ -402,6 +408,47 @@ class Game:
                                 break
                     break  # Found valid position, move to next weapon
 
+    def spawn_civilians(self):
+        """Spawn peaceful civilians around the map"""
+        num_civilians = 10  # Spawn 10 civilians
+        for _ in range(num_civilians):
+            for attempt in range(100):  # Try up to 100 times to find valid position
+                x = random.randint(0, MAP_WIDTH - PLAYER_SIZE)
+                y = random.randint(0, MAP_HEIGHT - PLAYER_SIZE)
+                rect = pygame.Rect(x, y, PLAYER_SIZE, PLAYER_SIZE)
+                # Check if civilian would spawn inside a wall
+                if not any(wall.rect.colliderect(rect) for wall in self.walls):
+                    from sprites import Civilian
+                    Civilian(self, x, y)
+                    break  # Found valid position, move to next civilian
+
+    def trigger_uprising(self, attacker, civilian_pos):
+        """Trigger civilian uprising - spawn enough angry civilians to eliminate all enemies"""
+        from sprites import UprisingCivilian, Enemy
+
+        # If attacker is an enemy, spawn civilians to kill all enemies
+        # Number of civilians = max_enemies * 3 (to ensure they overwhelm the enemies)
+        num_civilians = 20  # Default for player
+        if isinstance(attacker, Enemy):
+            num_civilians = max(20, self.max_enemies * 3)  # At least 20, or 3x the number of enemies
+            print(f"[UPRISING] Enemy killed civilian! Spawning {num_civilians} angry civilians to eliminate all {self.max_enemies} enemies!")
+        else:
+            print(f"[UPRISING] Player killed civilian! Spawning {num_civilians} angry civilians!")
+
+        for i in range(num_civilians):
+            for attempt in range(100):  # Try up to 100 times per civilian
+                # Spawn around the killed civilian's position
+                offset_x = random.randint(-300, 300)
+                offset_y = random.randint(-300, 300)
+                x = max(0, min(MAP_WIDTH - PLAYER_SIZE, civilian_pos.x + offset_x))
+                y = max(0, min(MAP_HEIGHT - PLAYER_SIZE, civilian_pos.y + offset_y))
+                rect = pygame.Rect(x, y, PLAYER_SIZE, PLAYER_SIZE)
+
+                # Check if position is valid (not in wall)
+                if not any(wall.rect.colliderect(rect) for wall in self.walls):
+                    UprisingCivilian(self, x, y, attacker)
+                    break  # Found valid position, move to next civilian
+
     def run(self):
         # Game Loop
         self.playing = True
@@ -442,7 +489,13 @@ class Game:
                 dir = vec(mx, my) - enemy_center
                 if dir.length() > 0:
                     dir = dir.normalize()
-                owner = 'enemy'
+                # Check if sprite is an UprisingCivilian
+                from sprites import UprisingCivilian
+                if isinstance(sprite, UprisingCivilian):
+                    owner = 'uprising_civilian'
+                    print(f"[DEBUG] UprisingCivilian shooting with owner: {owner}")
+                else:
+                    owner = 'enemy'
             
             # Apply damage upgrade for player
             damage = weapon_stats['damage']
@@ -456,6 +509,10 @@ class Game:
                 # Use selected bullet color for player
                 projectile_color = self.bullet_colors[self.selected_bullet_color]['rgb']
                 is_rainbow = self.selected_bullet_color == 'rainbow'
+            elif owner == 'uprising_civilian':
+                # White projectiles for uprising civilians
+                projectile_color = (255, 255, 255)
+                is_rainbow = False
             else:
                 projectile_color = (255, 50, 50)  # Red for enemies
                 is_rainbow = False
