@@ -729,6 +729,7 @@ class Game:
                         drop_y = max(0, min(MAP_HEIGHT - WEAPON_SIZE, enemy.pos.y + offset_y))
                         WeaponItem(self, drop_x, drop_y, enemy.weapon)
                     enemy.weapon = hit.type
+                    enemy.update_color()
 
                 # Upgrade Pickup Logic - Enemies only
                 upgrade_hits = pygame.sprite.spritecollide(enemy, self.upgrade_items, True)

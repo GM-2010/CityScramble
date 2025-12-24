@@ -509,6 +509,9 @@ class Enemy(pygame.sprite.Sprite):
         self.game = game
         self.image = pygame.Surface((ENEMY_SIZE, ENEMY_SIZE))
         self.image.fill(ENEMY_COLOR)
+        # Set initial color based on weapon (pistol)
+        self.weapon = 'pistol'
+        self.update_color()
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
@@ -518,7 +521,6 @@ class Enemy(pygame.sprite.Sprite):
         self.max_hp = 50
         self.hp = self.max_hp
         self.last_shot = 0
-        self.weapon = 'pistol' # Enemies use pistol for now
         self.player_last_pos = None  # Track player position for velocity calculation
         self.player_last_time = 0
 
@@ -575,6 +577,11 @@ class Enemy(pygame.sprite.Sprite):
         self.path_target_pos = None  # Target position for current path
         self.path_recalc_timer = 0  # Timer to limit path recalculations
         self.current_waypoint_index = 0  # Index of current waypoint in path
+
+    def update_color(self):
+        """Update enemy color to match current weapon color"""
+        weapon_color = WEAPONS[self.weapon]['color']
+        self.image.fill(weapon_color)
 
     def has_line_of_sight(self, target_pos):
         """Check if there's a clear line of sight to target position (no walls blocking)"""
