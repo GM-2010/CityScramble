@@ -30,7 +30,7 @@ class MenuManager:
         self.screen.blit(text_surface, text_rect)
 
     def show_start_screen(self):
-        if self.game.menu_music_loaded and self.game.menu_music:
+        if self.game.menu_music_loaded and self.game.menu_music and self.game.sounds_owned and self.game.sounds_active:
             self.game.menu_music.play(-1)
             
         # Button setup
