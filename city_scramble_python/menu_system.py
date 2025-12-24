@@ -1254,9 +1254,10 @@ class MenuManager:
                             break
 
     def show_special_shop(self):
-        """Shop for special items like Minimap"""
-        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 100, 200, 40)
-        buy_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 200, 300, 60)
+        """Shop for special items like Minimap and Sounds"""
+        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
+        buy_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 180, 300, 60)
+        buy_sounds_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 300, 300, 60)
         
         message = ""
         message_color = WHITE
@@ -1288,9 +1289,29 @@ class MenuManager:
                 text_rect = text.get_rect(center=buy_minimap_button.center)
                 self.screen.blit(text, text_rect)
             
-            # Description
-            desc = self.medium_font.render("Zeigt Gegner auf einem Radar an", True, WHITE)
-            self.screen.blit(desc, (SCREEN_WIDTH // 2 - 200, 280))
+            # Sounds Button
+            if not self.game.sounds_owned:
+                can_afford = self.game.total_score >= self.game.special_sounds_cost
+                color = (255, 150, 100) if can_afford else (100, 100, 100)
+                pygame.draw.rect(self.screen, color, buy_sounds_button)
+                pygame.draw.rect(self.screen, WHITE, buy_sounds_button, 3)
+                
+                text = self.font.render(f"Sounds kaufen ({self.game.special_sounds_cost:,})", True, WHITE)
+                text_rect = text.get_rect(center=buy_sounds_button.center)
+                self.screen.blit(text, text_rect)
+            else:
+                pygame.draw.rect(self.screen, (100, 255, 100), buy_sounds_button)
+                pygame.draw.rect(self.screen, WHITE, buy_sounds_button, 3)
+                text = self.font.render("Sounds im Besitz!", True, BLACK)
+                text_rect = text.get_rect(center=buy_sounds_button.center)
+                self.screen.blit(text, text_rect)
+
+            # Descriptions
+            map_desc = self.medium_font.render("Zeigt Gegner auf einem Radar an", True, WHITE)
+            self.screen.blit(map_desc, (SCREEN_WIDTH // 2 - 180, 245))
+            
+            sound_desc = self.medium_font.render("Schaltet Musik und Effekte frei", True, WHITE)
+            self.screen.blit(sound_desc, (SCREEN_WIDTH // 2 - 180, 365))
             
             # Back button
             pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
@@ -1321,11 +1342,24 @@ class MenuManager:
                         else:
                             message = "Nicht genug Punkte!"
                             message_color = (255, 100, 100)
+                    
+                    if buy_sounds_button.collidepoint(event.pos) and not self.game.sounds_owned:
+                        if self.game.total_score >= self.game.special_sounds_cost:
+                            self.game.total_score -= self.game.special_sounds_cost
+                            self.game.sounds_owned = True
+                            self.game.sounds_active = True
+                            self.game.save_total_score()
+                            message = "Sounds gekauft!"
+                            message_color = (100, 255, 100)
+                        else:
+                            message = "Nicht genug Punkte!"
+                            message_color = (255, 100, 100)
 
     def show_special_wardrobe(self):
         """Wardrobe for toggling special items"""
-        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 100, 200, 40)
-        toggle_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 200, 300, 60)
+        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
+        toggle_minimap_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 180, 300, 60)
+        toggle_sounds_button = pygame.Rect(SCREEN_WIDTH // 2 - 150, 260, 300, 60)
         
         message = ""
         message_color = WHITE
@@ -1355,6 +1389,24 @@ class MenuManager:
                 text_rect = text.get_rect(center=toggle_minimap_button.center)
                 self.screen.blit(text, text_rect)
             
+            # Sounds Toggle
+            if self.game.sounds_owned:
+                color = (255, 150, 100) if self.game.sounds_active else (200, 100, 100)
+                status_text = "AKTIV" if self.game.sounds_active else "INAKTIV"
+                
+                pygame.draw.rect(self.screen, color, toggle_sounds_button)
+                pygame.draw.rect(self.screen, WHITE, toggle_sounds_button, 3)
+                
+                text = self.font.render(f"Sounds: {status_text}", True, BLACK if self.game.sounds_active else WHITE)
+                text_rect = text.get_rect(center=toggle_sounds_button.center)
+                self.screen.blit(text, text_rect)
+            else:
+                pygame.draw.rect(self.screen, (100, 100, 100), toggle_sounds_button)
+                pygame.draw.rect(self.screen, WHITE, toggle_sounds_button, 3)
+                text = self.font.render("Sounds nicht im Besitz", True, (200, 200, 200))
+                text_rect = text.get_rect(center=toggle_sounds_button.center)
+                self.screen.blit(text, text_rect)
+            
             # Back button
             pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
             pygame.draw.rect(self.screen, WHITE, back_button, 2)
@@ -1372,6 +1424,14 @@ class MenuManager:
                     if toggle_minimap_button.collidepoint(event.pos) and self.game.minimap_owned:
                         self.game.minimap_active = not self.game.minimap_active
                         self.game.save_total_score()
+                    if toggle_sounds_button.collidepoint(event.pos) and self.game.sounds_owned:
+                        self.game.sounds_active = not self.game.sounds_active
+                        self.game.save_total_score()
+                        # Immediately update menu music state
+                        if self.game.sounds_active and self.game.menu_music_loaded:
+                            self.game.menu_music.play(-1)
+                        elif not self.game.sounds_active and self.game.menu_music_loaded:
+                            self.game.menu_music.stop()
 
     def show_go_screen(self):
         """Game Over screen"""

@@ -56,6 +56,11 @@ class Game:
         self.ai_dodge_difficulty = self.data_manager.get('ai_dodge_difficulty', 'normal')
         self.game_mode = self.data_manager.get('game_mode', 'classic')
         self.tutorial_completed = self.data_manager.get('tutorial_completed', False)
+        self.sounds_owned = self.data_manager.get('sounds_owned', False)
+        self.sounds_active = self.data_manager.get('sounds_active', False)
+        
+        self.special_minimap_cost = 1000000
+        self.special_sounds_cost = 1000000
         
         # Weapon upgrade system (only for player)
         self.weapon_upgrades = {
@@ -116,7 +121,12 @@ class Game:
             self.menu_music = pygame.mixer.Sound(self.menu_music_file)
             self.menu_music.set_volume(0.5)
             self.menu_music_loaded = True
-            print(f"[OK] Menue-Musik '{self.menu_music_file}' erfolgreich geladen")
+            # Only play if owned and active
+            if self.sounds_owned and self.sounds_active:
+                self.menu_music.play(-1)
+                print(f"[OK] Menue-Musik '{self.menu_music_file}' erfolgreich geladen und gestartet")
+            else:
+                print(f"[OK] Menue-Musik '{self.menu_music_file}' geladen (stumm, da nicht gekauft/aktiv)")
         except (pygame.error, FileNotFoundError) as e:
             self.menu_music_loaded = False
             print(f"[INFO] Konnte Menue-Musik nicht laden: {e}")
@@ -318,7 +328,8 @@ class Game:
             # Kurze Pause, damit Fade-Out abgeschlossen wird
             pygame.time.wait(1500)
         
-        if self.match_music_loaded:
+        # Starte Match-Musik nur wenn gekauft und aktiv
+        if self.match_music_loaded and self.sounds_owned and self.sounds_active:
             try:
                 # Starte Match-Musik mit Fade-In über 2 Sekunden
                 pygame.mixer.music.play(-1, fade_ms=2000)  # fade_ms = 2000ms Fade-In
@@ -326,10 +337,10 @@ class Game:
             except Exception as e:
                 print(f"[FEHLER] Fehler beim Starten der Match-Musik: {e}")
         else:
-            print("[INFO] Match-Musik nicht geladen, spiele ohne Musik")
+            print("[INFO] Match-Musik nicht geladen oder nicht gekauft, spiele ohne Musik")
         
-        # Starte parallel den zweiten Sound-Layer (75% leiser)
-        if self.match_sound2_loaded and self.match_sound2:
+        # Starte parallel den zweiten Sound-Layer (75% leiser) nur wenn gekauft und aktiv
+        if self.match_sound2_loaded and self.match_sound2 and self.sounds_owned and self.sounds_active:
             try:
                 self.match_sound2.play(-1, fade_ms=2000)  # -1 = Dauerschleife, 2s Fade-In
                 print("[OK] Match-Sound-Layer-2 parallel gestartet (75% leiser, 2s Fade-In)")
@@ -1239,6 +1250,8 @@ class Game:
         self.data_manager.set('ai_dodge_difficulty', self.ai_dodge_difficulty)
         self.data_manager.set('tutorial_completed', self.tutorial_completed)
         self.data_manager.set('game_mode', self.game_mode)
+        self.data_manager.set('sounds_owned', self.sounds_owned)
+        self.data_manager.set('sounds_active', self.sounds_active)
         
         self.data_manager.save()
     
