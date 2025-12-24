@@ -1459,15 +1459,22 @@ class MenuManager:
                         self.show_design_wardrobe()
 
     def show_design_shop(self):
-        """Shop to buy different world designs"""
-        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 80, 200, 40)
+        """Shop to buy different world designs and buildings"""
+        back_button = pygame.Rect(SCREEN_WIDTH // 2 - 100, SCREEN_HEIGHT - 60, 200, 40)
         
         # Grid setup for designs
-        design_ids = ['desert', 'grass', 'winter']
-        button_width = 300
-        button_height = 80
-        start_y = 180
-        spacing = 100
+        themes = [
+            {'id': 'desert', 'name': 'Wüste'},
+            {'id': 'grass', 'name': 'Wiese'},
+            {'id': 'winter', 'name': 'Winter'}
+        ]
+        
+        button_width = 240
+        button_height = 60
+        start_y = 150
+        spacing_y = 120
+        col1_x = SCREEN_WIDTH // 2 - 250
+        col2_x = SCREEN_WIDTH // 2 + 10
         
         message = ""
         message_color = WHITE
@@ -1475,38 +1482,59 @@ class MenuManager:
         while True:
             self.screen.fill(DARK_GREY)
             title = self.large_font.render("DESIGN-SHOP", True, (200, 200, 50))
-            self.screen.blit(title, (SCREEN_WIDTH // 2 - 150, 50))
-            self.draw_text(f"Punkte: {self.game.total_score:,}", SCREEN_WIDTH // 2 - 80, 120)
+            self.screen.blit(title, (SCREEN_WIDTH // 2 - 150, 40))
+            self.draw_text(f"Punkte: {self.game.total_score:,}", SCREEN_WIDTH // 2 - 80, 100)
             
             buttons = []
-            for i, d_id in enumerate(design_ids):
-                rect = pygame.Rect(SCREEN_WIDTH // 2 - 150, start_y + i * spacing, button_width, button_height)
-                buttons.append((rect, d_id))
+            for i, theme in enumerate(themes):
+                d_id = theme['id']
+                name = theme['name']
                 
-                owned = d_id in self.game.owned_designs
-                name = self.game.designs[d_id]['name']
-                cost = self.game.special_design_cost
+                # Theme Name Header
+                self.draw_text(name, col1_x, start_y + i * spacing_y - 30, (255, 255, 150))
                 
-                if owned:
+                # World Design Button
+                world_rect = pygame.Rect(col1_x, start_y + i * spacing_y, button_width, button_height)
+                world_owned = d_id in self.game.owned_designs
+                
+                if world_owned:
                     color = (100, 255, 100)
-                    btn_text = f"{name} (Gekauft)"
+                    btn_text = "Welt (Im Besitz)"
                 else:
-                    can_afford = self.game.total_score >= cost
+                    can_afford = self.game.total_score >= self.game.special_design_cost
                     color = (255, 150, 50) if can_afford else (100, 100, 100)
-                    btn_text = f"{name} ({cost:,})"
+                    btn_text = f"Welt kaufen (1M)"
                 
-                pygame.draw.rect(self.screen, color, rect)
-                pygame.draw.rect(self.screen, WHITE, rect, 3)
-                txt = self.font.render(btn_text, True, BLACK if owned else WHITE)
-                txt_rect = txt.get_rect(center=rect.center)
-                self.screen.blit(txt, txt_rect)
+                pygame.draw.rect(self.screen, color, world_rect)
+                pygame.draw.rect(self.screen, WHITE, world_rect, 3)
+                txt = self.medium_font.render(btn_text, True, BLACK if world_owned else WHITE)
+                self.screen.blit(txt, txt.get_rect(center=world_rect.center))
+                buttons.append({'rect': world_rect, 'type': 'world', 'id': d_id})
+
+                # Building Design Button
+                build_rect = pygame.Rect(col2_x, start_y + i * spacing_y, button_width, button_height)
+                build_owned = d_id in self.game.owned_building_designs
+                
+                if build_owned:
+                    color = (100, 255, 100)
+                    btn_text = "Häuser (Im Besitz)"
+                else:
+                    can_afford = self.game.total_score >= self.game.special_building_cost
+                    color = (200, 100, 255) if can_afford else (100, 100, 100)
+                    btn_text = f"Häuser kaufen (1M)"
+                
+                pygame.draw.rect(self.screen, color, build_rect)
+                pygame.draw.rect(self.screen, WHITE, build_rect, 3)
+                txt = self.medium_font.render(btn_text, True, BLACK if build_owned else WHITE)
+                self.screen.blit(txt, txt.get_rect(center=build_rect.center))
+                buttons.append({'rect': build_rect, 'type': 'building', 'id': d_id})
 
             pygame.draw.rect(self.screen, LIGHT_GREY, back_button)
             pygame.draw.rect(self.screen, WHITE, back_button, 2)
             self.draw_text("Zurück", back_button.x + 60, back_button.y + 10)
             
             if message:
-                self.draw_text(message, SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT - 130, message_color)
+                self.draw_text(message, SCREEN_WIDTH // 2 - 120, SCREEN_HEIGHT - 120, message_color)
                 
             pygame.display.flip()
             for event in pygame.event.get():
@@ -1514,17 +1542,29 @@ class MenuManager:
                     pygame.quit(); sys.exit()
                 if event.type == pygame.MOUSEBUTTONUP:
                     if back_button.collidepoint(event.pos): return
-                    for rect, d_id in buttons:
-                        if rect.collidepoint(event.pos) and d_id not in self.game.owned_designs:
-                            if self.game.total_score >= self.game.special_design_cost:
-                                self.game.total_score -= self.game.special_design_cost
-                                self.game.owned_designs.append(d_id)
-                                self.game.save_total_score()
-                                message = "Design gekauft!"
-                                message_color = (100, 255, 100)
-                            else:
-                                message = "Zu wenig Punkte!"
-                                message_color = (255, 100, 100)
+                    for b in buttons:
+                        if b['rect'].collidepoint(event.pos):
+                            d_id = b['id']
+                            if b['type'] == 'world' and d_id not in self.game.owned_designs:
+                                if self.game.total_score >= self.game.special_design_cost:
+                                    self.game.total_score -= self.game.special_design_cost
+                                    self.game.owned_designs.append(d_id)
+                                    self.game.save_total_score()
+                                    message = f"Welt {d_id} gekauft!"
+                                    message_color = (100, 255, 100)
+                                else:
+                                    message = "Zu wenig Punkte!"
+                                    message_color = (255, 100, 100)
+                            elif b['type'] == 'building' and d_id not in self.game.owned_building_designs:
+                                if self.game.total_score >= self.game.special_building_cost:
+                                    self.game.total_score -= self.game.special_building_cost
+                                    self.game.owned_building_designs.append(d_id)
+                                    self.game.save_total_score()
+                                    message = f"Häuser {d_id} gekauft!"
+                                    message_color = (100, 255, 100)
+                                else:
+                                    message = "Zu wenig Punkte!"
+                                    message_color = (255, 100, 100)
 
     def show_design_wardrobe(self):
         """Wardrobe to select world designs"""

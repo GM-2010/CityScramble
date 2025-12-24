@@ -233,16 +233,25 @@ class Obstacle(pygame.sprite.Sprite):
         self.game = game
         self.image = pygame.Surface((w, h))
         
-        # Load and scale house image
+        # Load and scale house image from design
+        design_id = game.selected_design
+        design_info = game.designs.get(design_id, game.designs['classic'])
+        
+        # Use themed building if owned, otherwise classic
+        if design_id in game.owned_building_designs:
+            house_img_file = design_info.get('building_img', 'haus.jpg')
+        else:
+            house_img_file = 'haus.jpg'
+
         try:
             import os
             script_dir = os.path.dirname(os.path.abspath(__file__))
-            house_path = os.path.join(script_dir, "haus.jpg")
+            house_path = os.path.join(script_dir, house_img_file)
             house_img = pygame.image.load(house_path).convert()
             self.original_image = pygame.transform.scale(house_img, (w, h))
             self.image.blit(self.original_image, (0, 0))
         except Exception as e:
-            print(f"[FEHLER] Konnte haus.jpg nicht laden: {e}")
+            print(f"[FEHLER] Konnte {house_img_file} nicht laden: {e}")
             self.image.fill(SANDSTONE)
             self.original_image = self.image.copy()
 

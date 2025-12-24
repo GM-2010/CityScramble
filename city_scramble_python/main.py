@@ -60,17 +60,19 @@ class Game:
         self.sounds_active = self.data_manager.get('sounds_active', False)
         self.owned_designs = self.data_manager.get('owned_designs', ['classic'])
         self.selected_design = self.data_manager.get('selected_design', 'classic')
+        self.owned_building_designs = self.data_manager.get('owned_building_designs', ['classic'])
         
         self.special_minimap_cost = 1000000
         self.special_sounds_cost = 1000000
         self.special_design_cost = 1000000
+        self.special_building_cost = 1000000
         
         # Design configuration
         self.designs = {
-            'classic': {'name': 'Klassisch', 'img': None, 'color': DARK_GREY},
-            'desert': {'name': 'Wüste', 'img': 'sand.webp', 'color': (235, 215, 175)},
-            'grass': {'name': 'Wiese', 'img': 'grass.png', 'color': (50, 150, 50)},
-            'winter': {'name': 'Winter', 'img': 'snow.png', 'color': (200, 230, 255)}
+            'classic': {'name': 'Klassisch', 'img': None, 'building_img': 'haus.jpg', 'color': DARK_GREY},
+            'desert': {'name': 'Wüste', 'img': 'sand.webp', 'building_img': 'house_desert.png', 'color': (235, 215, 175)},
+            'grass': {'name': 'Wiese', 'img': 'grass.png', 'building_img': 'house_grass.png', 'color': (50, 150, 50)},
+            'winter': {'name': 'Winter', 'img': 'snow.png', 'building_img': 'house_winter.png', 'color': (200, 230, 255)}
         }
         
         # Weapon upgrade system (only for player)
@@ -1265,6 +1267,7 @@ class Game:
         self.data_manager.set('sounds_active', self.sounds_active)
         self.data_manager.set('owned_designs', self.owned_designs)
         self.data_manager.set('selected_design', self.selected_design)
+        self.data_manager.set('owned_building_designs', self.owned_building_designs)
         
         self.data_manager.save()
     
