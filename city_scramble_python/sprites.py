@@ -13,14 +13,19 @@ class CameraGroup(pygame.sprite.Group):
         self.half_h = self.display_surface.get_size()[1] // 2
         
         # Create a map surface (optional, but good for performance if static)
-        # For now, we'll just draw a grid dynamically or a large background rect
         self.ground_surf = pygame.Surface((MAP_WIDTH, MAP_HEIGHT))
-        self.ground_surf.fill(DARK_GREY)
-        # Draw grid
-        for x in range(0, MAP_WIDTH, 100):
-            pygame.draw.line(self.ground_surf, LIGHT_GREY, (x, 0), (x, MAP_HEIGHT))
-        for y in range(0, MAP_HEIGHT, 100):
-            pygame.draw.line(self.ground_surf, LIGHT_GREY, (0, y), (MAP_WIDTH, y))
+        
+        # Load sand texture
+        try:
+            sand_img = pygame.image.load("sand.webp").convert()
+            # Tile the texture
+            for x in range(0, MAP_WIDTH, sand_img.get_width()):
+                for y in range(0, MAP_HEIGHT, sand_img.get_height()):
+                    self.ground_surf.blit(sand_img, (x, y))
+        except Exception as e:
+            print(f"Could not load sand.webp: {e}")
+            self.ground_surf.fill((235, 215, 175)) # Fallback SAND color
+            
         self.ground_rect = self.ground_surf.get_rect(topleft=(0, 0))
 
     def custom_draw(self, player):
@@ -37,11 +42,18 @@ class CameraGroup(pygame.sprite.Group):
         self.display_surface.blit(self.ground_surf, ground_offset)
 
         # Draw sprites
+        # Define camera view rect for culling (add margin to avoid pop-in)
+        camera_view = pygame.Rect(self.offset.x - 50, self.offset.y - 50, 
+                                 SCREEN_WIDTH + 100, SCREEN_HEIGHT + 100)
+        
         for sprite in self.sprites():
-            offset_pos = sprite.rect.topleft - self.offset
-            self.display_surface.blit(sprite.image, offset_pos)
+            if camera_view.colliderect(sprite.rect):
+                offset_pos = sprite.rect.topleft - self.offset
+                self.display_surface.blit(sprite.image, offset_pos)
+            else:
+                continue # Skip drawing and health bars if off-screen
             
-            # Draw Health Bars
+            # Health bars logic continues... (indented)
             # Player / NetworkPlayer (use hit_count)
             if hasattr(sprite, 'hit_count'):
                 # Max hits 10. Current Health = 10 - hit_count
@@ -207,7 +219,17 @@ class Obstacle(pygame.sprite.Sprite):
         pygame.sprite.Sprite.__init__(self, self.groups)
         self.game = game
         self.image = pygame.Surface((w, h))
-        self.image.fill(BROWN)
+        
+        # Load and scale house image
+        try:
+            house_img = pygame.image.load("haus.jpg").convert()
+            self.original_image = pygame.transform.scale(house_img, (w, h))
+            self.image.blit(self.original_image, (0, 0))
+        except Exception as e:
+            print(f"Could not load haus.jpg: {e}")
+            self.image.fill(SANDSTONE)
+            self.original_image = self.image.copy()
+
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
@@ -224,8 +246,12 @@ class Obstacle(pygame.sprite.Sprite):
         self.hp -= amount
         # Visual feedback - darken when damaged
         damage_percent = self.hp / self.max_hp
-        color_value = int(139 * damage_percent)  # BROWN = (139, 69, 19)
-        self.image.fill((color_value, int(69 * damage_percent), int(19 * damage_percent)))
+        
+        # Redraw original and apply darkening filter
+        self.image.blit(self.original_image, (0, 0))
+        dark_value = int(255 * damage_percent)
+        # Multiply blend to darken the image
+        self.image.fill((dark_value, dark_value, dark_value), special_flags=pygame.BLEND_RGB_MULT)
         
         if self.hp <= 0:
             # Schedule respawn
@@ -484,6 +510,37 @@ class Enemy(pygame.sprite.Sprite):
         self.last_move_time = pygame.time.get_ticks()
         self.last_pos_check = vec(x, y)
         self.stuck_check_timer = 0
+        self.last_stuck_pos = None
+        self.last_stuck_time = 0
+        self.reroute_dir = None
+        self.reroute_end_time = 0
+        self.dodge_direction = None
+        self.dodge_start_time = 0
+        self.dodge_duration = 500 # 0.5 seconds dodge duration
+        self.dodge_speed_multiplier = 3.0 # Speed multiplier during dodge
+
+        # Flanking Logic (Start of match dispersal)
+        self.flanking_mode = True
+        self.flanking_start_time = pygame.time.get_ticks()
+        self.flanking_duration = random.randint(3000, 6000)
+        
+        # Calculate random flanking target around player
+        angle = random.uniform(0, 360)
+        distance = random.uniform(500, 900)
+        offset = vec(distance, 0).rotate(angle)
+        
+        # We need player pos, but player might not be fully initialized or self.game.player might be reference.
+        # Assuming self.game.player.pos is valid.
+        if hasattr(self.game, 'player') and hasattr(self.game.player, 'pos'):
+             target = self.game.player.pos + offset
+        else:
+             target = self.pos + offset # Fallback
+             
+        # Clamp to map bounds
+        target.x = max(50, min(MAP_WIDTH - 50, target.x))
+        target.y = max(50, min(MAP_HEIGHT - 50, target.y))
+        self.flanking_target = target
+        self.stuck_check_timer = 0
         self.reroute_end_time = 0
         self.reroute_dir = vec(0, 0)
 
@@ -496,6 +553,12 @@ class Enemy(pygame.sprite.Sprite):
         # New stuck prevention tracking
         self.last_stuck_pos = None
         self.last_stuck_time = 0
+        
+        # Pathfinding attributes
+        self.path = []  # List of waypoint positions [(x,y), ...]
+        self.path_target_pos = None  # Target position for current path
+        self.path_recalc_timer = 0  # Timer to limit path recalculations
+        self.current_waypoint_index = 0  # Index of current waypoint in path
 
     def has_line_of_sight(self, target_pos):
         """Check if there's a clear line of sight to target position (no walls blocking)"""
@@ -807,6 +870,31 @@ class Enemy(pygame.sprite.Sprite):
     
     def update(self):
         now = pygame.time.get_ticks()
+        
+        # LOGIC LOD: Check distance to player
+        # If far away, skip expensive logic (pathfinding, dodging, collision precise checks)
+        dist_sq_to_player = (self.pos - self.game.player.pos).length_squared()
+        
+        # 2000^2 = 4,000,000. If > 2000px away, do minimal update
+        if dist_sq_to_player > 4000000:
+            # Just move towards player simply, no pathfinding, no dodging
+            # Update direction only every 2 seconds to save sqrt calls
+            if now % 2000 < 50: 
+                dir = (self.game.player.pos - self.pos)
+                if dir.length_squared() > 0:
+                    self.vel = dir.normalize() * ENEMY_SPEED
+            
+            # Simple movement
+            self.pos += self.vel * self.game.dt
+            self.rect.center = self.pos
+            # Boundary checks only (fast)
+            if self.pos.x < 0: self.pos.x = 0
+            if self.pos.x > MAP_WIDTH - ENEMY_SIZE: self.pos.x = MAP_WIDTH - ENEMY_SIZE
+            if self.pos.y < 0: self.pos.y = 0
+            if self.pos.y > MAP_HEIGHT - ENEMY_SIZE: self.pos.y = MAP_HEIGHT - ENEMY_SIZE
+            return # SKIP REST OF UPDATE
+            
+        # Check if currently in a dodge maneuver
 
         # Check if currently in a dodge maneuver
         dodge_velocity = None
@@ -893,37 +981,126 @@ class Enemy(pygame.sprite.Sprite):
                     self.last_stuck_pos = vec(self.pos.x, self.pos.y)
                     self.last_stuck_time = now
         
-        # AI behavior: prioritize upgrades, then chase player
+        # AI behavior: Phases (Flanking -> Tactics -> Combat)
         target_pos = None
         
         # Override movement if rerouting
         if now < self.reroute_end_time:
             self.vel = self.reroute_dir * ENEMY_SPEED
         else:
-            # Check for nearby upgrades (within 300 pixels)
-            closest_upgrade = None
-            closest_distance = 300  # Detection range
+            # PHASE 1: FLANKING (Start of match)
+            if self.flanking_mode:
+                if now - self.flanking_start_time > self.flanking_duration:
+                    self.flanking_mode = False
+                else:
+                    target_pos = self.flanking_target
             
-            for upgrade in self.game.upgrade_items:
-                dist = (vec(upgrade.rect.centerx, upgrade.rect.centery) - self.pos).length()
-                if dist < closest_distance:
-                    closest_distance = dist
-                    closest_upgrade = upgrade
-            
-            # If upgrade found, go for it
-            if closest_upgrade:
-                target_pos = vec(closest_upgrade.rect.centerx, closest_upgrade.rect.centery)
-            else:
-                # Otherwise chase player
-                target_pos = self.game.player.pos
+            # PHASE 2: TACTICS & COMBAT
+            if not target_pos: # Only if not flanking or rerouting
+                
+                # Check for nearby upgrades (priority over combat)
+                closest_upgrade = None
+                closest_distance = 300  # Detection range
+                
+                for upgrade in self.game.upgrade_items:
+                    dist = (vec(upgrade.rect.centerx, upgrade.rect.centery) - self.pos).length()
+                    if dist < closest_distance:
+                        closest_distance = dist
+                        closest_upgrade = upgrade
+                
+                if closest_upgrade:
+                    # Priority 1: Pick up upgrade
+                    target_pos = vec(closest_upgrade.rect.centerx, closest_upgrade.rect.centery)
+                else:
+                    # Priority 2: Regrouping Logic (Teamwork)
+                    # Check if isolated (no teammates within 100px)
+                    # Use spatial hash for efficiency
+                    nearby_objects = self.game.spatial_hash.get_nearby(self.rect.inflate(200, 200))
+                    ally_count = 0
+                    for obj in nearby_objects:
+                        if isinstance(obj, Enemy) and obj != self:
+                            dist = (self.pos - obj.pos).length()
+                            if dist < 150: # Check 150px radius for allies
+                                ally_count += 1
+                                
+                    if ally_count == 0:
+                        # ISOLATED! Find nearest ally to regroup
+                        nearest_ally = None
+                        min_ally_dist = 99999
+                        
+                        # Find nearest ally (iterating all enemies - usually < 50, so cheap)
+                        # Skip this frame if too many enemies to save CPU? No, 50 is fine.
+                        for ally in self.game.enemies:
+                            if ally != self:
+                                d = (self.pos - ally.pos).length_squared()
+                                if d < min_ally_dist:
+                                    min_ally_dist = d
+                                    nearest_ally = ally
+                                    
+                        if nearest_ally:
+                            # Move towards ally
+                            target_pos = nearest_ally.pos
+                            # Optional: Don't shoot while regrouping to focus on movement? 
+                            # self.last_shot = now # Suppress fire? Maybe not, keep shooting.
+                    
+                    if not target_pos:
+                        # Priority 3: Attack Player
+                        target_pos = self.game.player.pos
         
         # Move towards target (or dodge if necessary)
         if dodge_velocity:
-            # Dodging takes priority over normal movement
+            # Dodging takes priorityover normal movement
             self.vel = dodge_velocity
         else:
-            # Normal movement - with loop prevention
-            dir = target_pos - self.pos
+            # Pathfinding-based movement
+            # Update path if needed (target changed significantly or path recalc timeout)
+            should_recalc = False
+            
+            if self.path_target_pos is None or target_pos is None:
+                should_recalc = True
+            elif (target_pos - self.path_target_pos).length() > 100:  # Target moved >100px
+               should_recalc = True
+            elif now - self.path_recalc_timer > 1000:  # Recalc every 1 second
+                should_recalc = True
+            
+            if should_recalc and target_pos and hasattr(self.game, 'pathfinding_grid'):
+                from pathfinding import find_path
+                self.path = find_path((self.pos.x, self.pos.y), (target_pos.x, target_pos.y), 
+                                     self.game.pathfinding_grid)
+                self.path_target_pos = target_pos.copy() if hasattr(target_pos, 'copy') else vec(target_pos[0], target_pos[1])
+                self.path_recalc_timer = now
+                self.current_waypoint_index = 0
+            
+            # Follow path if it exists
+            if self.path and len(self.path) > 0:
+                # Get current waypoint
+                if self.current_waypoint_index < len(self.path):
+                    waypoint = self.path[self.current_waypoint_index]
+                    waypoint_vec = vec(waypoint[0], waypoint[1])
+                    
+                    # Check if reached current waypoint
+                    dist_to_waypoint = (self.pos - waypoint_vec).length()
+                    if dist_to_waypoint < 30:  # Reached waypoint (within 30px)
+                        self.current_waypoint_index += 1
+                        if self.current_waypoint_index >= len(self.path):
+                            # Reached end of path, clear it
+                            self.path = []
+                            self.current_waypoint_index = 0
+                    
+                    # Move towards current waypoint
+                    if self.current_waypoint_index < len(self.path):
+                        waypoint = self.path[self.current_waypoint_index]
+                        waypoint_vec = vec(waypoint[0], waypoint[1])
+                        dir = waypoint_vec - self.pos
+                    else:
+                        # No more waypoints, move directly to target
+                        dir = target_pos - self.pos if target_pos else vec(0, 0)
+                else:
+                    # Path completed
+                    dir = target_pos - self.pos if target_pos else vec(0, 0)
+            else:
+                # No path, move directly (fallback)
+                dir = target_pos - self.pos if target_pos else vec(0, 0)
             
             # Avoid last stuck position if recent (within 5 seconds)
             if self.last_stuck_pos and (now - self.last_stuck_time) < 5000:
@@ -946,12 +1123,20 @@ class Enemy(pygame.sprite.Sprite):
             
         self.pos += self.vel * self.game.dt
         
-        self.pos += self.vel * self.game.dt
-        
         self.rect.x = self.pos.x
         self.collide_with_walls('x')
         self.rect.y = self.pos.y
         self.collide_with_walls('y')
+        
+        # Boundary checks
+        if self.pos.x < 0: self.pos.x = 0
+        if self.pos.x > MAP_WIDTH - ENEMY_SIZE: self.pos.x = MAP_WIDTH - ENEMY_SIZE
+        if self.pos.y < 0: self.pos.y = 0
+        if self.pos.y > MAP_HEIGHT - ENEMY_SIZE: self.pos.y = MAP_HEIGHT - ENEMY_SIZE
+        
+        # Sync rect with pos after boundary checks
+        self.rect.x = self.pos.x
+        self.rect.y = self.pos.y
         
         # Shooting AI - 750ms for most weapons, machinegun uses its own rate
         now = pygame.time.get_ticks()
@@ -1242,6 +1427,12 @@ class TeamAI(pygame.sprite.Sprite):
         self.dodge_direction = None
         self.dodge_duration = 400
         self.dodge_speed_multiplier = 3.0
+        
+        # Pathfinding attributes
+        self.path = []  # List of waypoint positions [(x,y), ...]
+        self.path_target_pos = None  # Target position for current path
+        self.path_recalc_timer = 0  # Timer to limit path recalculations
+        self.current_waypoint_index = 0  # Index of current waypoint in path
 
     def has_line_of_sight(self, target_pos):
         """Check if there's a clear line of sight to target position"""
@@ -1377,7 +1568,50 @@ class TeamAI(pygame.sprite.Sprite):
             tactical_target = target_pos + tactical_offset
             
             # Direction towards the tactical spot
-            dir = tactical_target - self.pos
+            # Use pathfinding to navigate to tactical target
+            should_recalc = False
+            
+            if self.path_target_pos is None:
+                should_recalc = True
+            elif (tactical_target - self.path_target_pos).length() > 100:  # Target moved >100px
+                should_recalc = True
+            elif now - self.path_recalc_timer > 1000:  # Recalc every 1 second
+                should_recalc = True
+            
+            if should_recalc and hasattr(self.game, 'pathfinding_grid'):
+                from pathfinding import find_path
+                self.path = find_path((self.pos.x, self.pos.y), (tactical_target.x, tactical_target.y),
+                                     self.game.pathfinding_grid)
+                self.path_target_pos = tactical_target.copy()
+                self.path_recalc_timer = now
+                self.current_waypoint_index = 0
+            
+            # Follow path if it exists
+            if self.path and len(self.path) > 0:
+                if self.current_waypoint_index < len(self.path):
+                    waypoint = self.path[self.current_waypoint_index]
+                    waypoint_vec = vec(waypoint[0], waypoint[1])
+                    
+                    # Check if reached waypoint
+                    dist_to_waypoint = (self.pos - waypoint_vec).length()
+                    if dist_to_waypoint < 30:
+                        self.current_waypoint_index += 1
+                        if self.current_waypoint_index >= len(self.path):
+                            self.path = []
+                            self.current_waypoint_index = 0
+                    
+                    # Move to waypoint
+                    if self.current_waypoint_index < len(self.path):
+                        waypoint = self.path[self.current_waypoint_index]
+                        waypoint_vec = vec(waypoint[0], waypoint[1])
+                        dir = waypoint_vec - self.pos
+                    else:
+                        dir = tactical_target - self.pos
+                else:
+                    dir = tactical_target - self.pos
+            else:
+                # Fallback to direct movement
+                dir = tactical_target - self.pos
             
             # SPACING: Avoid crowding other teammates
             teammates = self.game.team_allies if self.team == 'blue' else self.game.team_enemies
@@ -1418,6 +1652,16 @@ class TeamAI(pygame.sprite.Sprite):
             self.collide_with_walls('x')
             self.rect.y = self.pos.y
             self.collide_with_walls('y')
+            
+            # Boundary checks
+            if self.pos.x < 0: self.pos.x = 0
+            if self.pos.x > MAP_WIDTH - PLAYER_SIZE: self.pos.x = MAP_WIDTH - PLAYER_SIZE
+            if self.pos.y < 0: self.pos.y = 0
+            if self.pos.y > MAP_HEIGHT - PLAYER_SIZE: self.pos.y = MAP_HEIGHT - PLAYER_SIZE
+            
+            # Sync rect with pos after boundary checks
+            self.rect.x = self.pos.x
+            self.rect.y = self.pos.y
 
             # Shooting AI
             fire_rate = WEAPONS[self.weapon]['rate']

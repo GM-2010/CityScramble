@@ -23,6 +23,8 @@ YELLOW = (255, 255, 0)
 CYAN = (0, 255, 255)
 ORANGE = (255, 165, 0)
 PURPLE = (128, 0, 128)
+SANDSTONE = (180, 130, 70)
+CACTUS_GREEN = (50, 150, 50)
 
 # Game settings
 ROUND_TIME = 180  # 3 minutes
