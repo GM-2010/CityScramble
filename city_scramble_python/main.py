@@ -338,6 +338,12 @@ class Game:
 
         self.run()
         
+        # Add score to total score and save (unless in tutorial)
+        if not self.tutorial_mode:
+            self.total_score += self.score
+            self.save_total_score()
+            print(f"[DataManager] Match score {self.score} added to total score. Total: {self.total_score}")
+
         # Fade-Out beider Match-Sounds nach Match-Ende (2 Sekunden)
         pygame.mixer.music.fadeout(2000)  # 2000ms = 2 Sekunden
         if self.match_sound2_loaded and self.match_sound2:
