@@ -410,7 +410,7 @@ class Game:
 
     def spawn_civilians(self):
         """Spawn peaceful civilians around the map"""
-        num_civilians = 10  # Spawn 10 civilians
+        num_civilians = 40  # Spawn 40 civilians
         for _ in range(num_civilians):
             for attempt in range(100):  # Try up to 100 times to find valid position
                 x = random.randint(0, MAP_WIDTH - PLAYER_SIZE)
@@ -423,17 +423,11 @@ class Game:
                     break  # Found valid position, move to next civilian
 
     def trigger_uprising(self, attacker, civilian_pos):
-        """Trigger civilian uprising - spawn enough angry civilians to eliminate all enemies"""
+        """Trigger civilian uprising - spawn 40 angry civilians to eliminate all enemies"""
         from sprites import UprisingCivilian, Enemy
 
-        # If attacker is an enemy, spawn civilians to kill all enemies
-        # Number of civilians = max_enemies * 3 (to ensure they overwhelm the enemies)
-        num_civilians = 20  # Default for player
-        if isinstance(attacker, Enemy):
-            num_civilians = max(20, self.max_enemies * 3)  # At least 20, or 3x the number of enemies
-            print(f"[UPRISING] Enemy killed civilian! Spawning {num_civilians} angry civilians to eliminate all {self.max_enemies} enemies!")
-        else:
-            print(f"[UPRISING] Player killed civilian! Spawning {num_civilians} angry civilians!")
+        num_civilians = 40  # Unified uprising count
+        print(f"[UPRISING] Civilian killed by {attacker}! Spawning {num_civilians} angry civilians!")
 
         for i in range(num_civilians):
             for attempt in range(100):  # Try up to 100 times per civilian
@@ -523,10 +517,10 @@ class Game:
                 vel = dir.rotate(spread)
                 if weapon_name == 'grenade':
                     Grenade(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y, owner,
-                           damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, is_rainbow)
+                           damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, is_rainbow, shooter=sprite)
                 else:
                     Projectile(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y, owner,
-                                damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, is_rainbow)
+                                damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, is_rainbow, shooter=sprite)
 
     def events(self):
         for event in pygame.event.get():
@@ -602,10 +596,10 @@ class Game:
                 vel = dir.rotate(spread)
                 if weapon_name == 'grenade':
                     proj = Grenade(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y, owner,
-                           damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, False)
+                           damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, False, shooter=sprite)
                 else:
                     proj = Projectile(self, sprite.rect.centerx, sprite.rect.centery, vel.x, vel.y, owner,
-                              damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, False)
+                              damage, weapon_stats['speed'], weapon_stats['lifetime'], projectile_color, False, shooter=sprite)
                 print(f"DEBUG: Created projectile with owner={proj.owner}")
 
     def schedule_team_respawn(self, team, x, y):

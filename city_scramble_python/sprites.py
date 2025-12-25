@@ -282,11 +282,12 @@ class Obstacle(pygame.sprite.Sprite):
             self.kill()
 
 class Projectile(pygame.sprite.Sprite):
-    def __init__(self, game, x, y, dir_x, dir_y, owner, damage, speed, lifetime, color, is_rainbow=False):
+    def __init__(self, game, x, y, dir_x, dir_y, owner, damage, speed, lifetime, color, is_rainbow=False, shooter=None):
         self.groups = game.all_sprites, game.projectiles
         pygame.sprite.Sprite.__init__(self, self.groups)
         self.game = game
         self.owner = owner
+        self.shooter = shooter
         self.damage = damage
         self.image = pygame.Surface((10, 10))
         self.image.fill(color)
@@ -326,7 +327,24 @@ class Projectile(pygame.sprite.Sprite):
                     if hasattr(self.game, 'team_blue_score'):
                         self.game.team_blue_score += self.damage
                     self.kill()
-                    break  # Only hit one target per projectile
+                    return  # Exit after kill
+
+            # Team Blue projectiles also hit civilians
+            civilian_hits = pygame.sprite.spritecollide(self, self.game.civilians, False)
+            if civilian_hits:
+                for civ in civilian_hits:
+                    # Attribution remains to player for uprising logic, but pass shooter for one-shot check
+                    civ.take_damage(self.damage, self.shooter if self.shooter else self.game.player)
+                    self.kill()
+                    return
+
+            uprising_hits = pygame.sprite.spritecollide(self, self.game.uprising_civilians, False)
+            if uprising_hits:
+                for up_civ in uprising_hits:
+                    up_civ.take_damage(self.damage)
+                    self.kill()
+                    return
+
         elif self.owner == 'team_red':
             # Red team projectiles hit blue team
             hits = pygame.sprite.spritecollide(self, self.game.team_allies, False)
@@ -343,6 +361,28 @@ class Projectile(pygame.sprite.Sprite):
                 if hasattr(self.game, 'team_red_score'):
                     self.game.team_red_score += self.damage
                 self.kill()
+                return
+
+            # Team Red projectiles also hit civilians
+            civilian_hits = pygame.sprite.spritecollide(self, self.game.civilians, False)
+            if civilian_hits:
+                for civ in civilian_hits:
+                    # Find a red team member to blame
+                    shooter = self.shooter
+                    if shooter is None and len(self.game.team_enemies) > 0:
+                        shooter = list(self.game.team_enemies)[0]
+                    if shooter:
+                        civ.take_damage(self.damage, shooter)
+                    self.kill()
+                    return
+
+            uprising_hits = pygame.sprite.spritecollide(self, self.game.uprising_civilians, False)
+            if uprising_hits:
+                for up_civ in uprising_hits:
+                    up_civ.take_damage(self.damage)
+                    self.kill()
+                    return
+
         # Normal mode collision handling
         elif self.owner == 'player':
             # Player projectiles hit enemies
@@ -361,7 +401,7 @@ class Projectile(pygame.sprite.Sprite):
             civilian_hits = pygame.sprite.spritecollide(self, self.game.civilians, False)
             if civilian_hits:
                 for civ in civilian_hits:
-                    civ.take_damage(self.damage, self.game.player)
+                    civ.take_damage(self.damage, self.shooter if self.shooter else self.game.player)
                     self.kill()
                     return
 
@@ -389,13 +429,19 @@ class Projectile(pygame.sprite.Sprite):
             if civilian_hits:
                 for civ in civilian_hits:
                     # Find which enemy shot this
-                    # We need to track the shooter in the projectile
-                    # For now, we'll use the first enemy as fallback
-                    shooter = getattr(self, 'shooter', None)
+                    shooter = self.shooter
                     if shooter is None and len(self.game.enemies) > 0:
                         shooter = list(self.game.enemies)[0]
                     if shooter:
                         civ.take_damage(self.damage, shooter)
+                    self.kill()
+                    return
+
+            # Enemy projectiles hit uprising civilians
+            uprising_hits = pygame.sprite.spritecollide(self, self.game.uprising_civilians, False)
+            if uprising_hits:
+                for up_civ in uprising_hits:
+                    up_civ.take_damage(self.damage)
                     self.kill()
                     return
 
@@ -459,8 +505,8 @@ class BuildingProjectile(pygame.sprite.Sprite):
 
 
 class Grenade(Projectile):
-    def __init__(self, game, x, y, dir_x, dir_y, owner, damage, speed, lifetime, color, is_rainbow=False):
-        super().__init__(game, x, y, dir_x, dir_y, owner, damage, speed, lifetime, color, is_rainbow)
+    def __init__(self, game, x, y, dir_x, dir_y, owner, damage, speed, lifetime, color, is_rainbow=False, shooter=None):
+        super().__init__(game, x, y, dir_x, dir_y, owner, damage, speed, lifetime, color, is_rainbow, shooter)
         self.explosion_radius = 100  # Area damage radius
         
     def update(self):
@@ -514,6 +560,18 @@ class Grenade(Projectile):
                 self.game.player.hit_count += 1
                 self.explode()
                 self.kill()
+                return
+
+            # Enemy grenades also hit civilians
+            if pygame.sprite.spritecollideany(self, self.game.civilians):
+                self.explode()
+                self.kill()
+                return
+            if pygame.sprite.spritecollideany(self, self.game.uprising_civilians):
+                self.explode()
+                self.kill()
+                return
+
         elif self.owner == 'uprising_civilian':
             # Check collision with player
             if pygame.sprite.collide_rect(self, self.game.player):
@@ -573,17 +631,35 @@ class Grenade(Projectile):
                     up_civ.take_damage(self.damage)
 
         elif self.owner == 'enemy':
-            # Enemy grenades damage the player only
-            dist = vec(self.game.player.rect.centerx - self.rect.centerx,
+            # Enemy grenades damage the player
+            dist_to_player = vec(self.game.player.rect.centerx - self.rect.centerx,
                       self.game.player.rect.centery - self.rect.centery).length()
-            if dist <= self.explosion_radius:
+            if dist_to_player <= self.explosion_radius:
                 # Calculate damage based on distance (full damage at center, less at edge)
-                damage_multiplier = 1.0 - (dist / self.explosion_radius)
+                damage_multiplier = 1.0 - (dist_to_player / self.explosion_radius)
                 damage = max(1, int(self.damage * damage_multiplier))
                 self.game.player.hit_count += damage
                 # Reset regeneration timer when hit
                 self.game.player.last_action_time = pygame.time.get_ticks()
                 self.game.player.last_regen_time = pygame.time.get_ticks()
+
+            # Damage civilians (trigger uprising for each hit)
+            for civilian in self.game.civilians:
+                dist = vec(civilian.rect.centerx - self.rect.centerx,
+                          civilian.rect.centery - self.rect.centery).length()
+                if dist <= self.explosion_radius:
+                    # Use the stored shooter
+                    shooter = self.shooter
+                    if shooter is None and len(self.game.enemies) > 0:
+                         shooter = list(self.game.enemies)[0]
+                    civilian.take_damage(self.damage, shooter)
+
+            # Damage uprising civilians
+            for up_civ in self.game.uprising_civilians:
+                dist = vec(up_civ.rect.centerx - self.rect.centerx,
+                          up_civ.rect.centery - self.rect.centery).length()
+                if dist <= self.explosion_radius:
+                    up_civ.take_damage(self.damage)
 
         elif self.owner == 'uprising_civilian':
             # Uprising civilian grenades damage their target (player or enemies)
@@ -757,6 +833,16 @@ class Enemy(pygame.sprite.Sprite):
             # Check if this point intersects any wall
             for wall in self.game.walls:
                 if wall.rect.colliderect(check_rect):
+                    return False
+            
+            # AI Avoidance: Check if this point intersects any civilians
+            for civilian in self.game.civilians:
+                if civilian.rect.colliderect(check_rect):
+                    return False
+            for up_civ in self.game.uprising_civilians:
+                # Don't block self or friendlies depending on implementation, 
+                # but generally avoid any civilian in the line of fire
+                if up_civ != self and up_civ.rect.colliderect(check_rect):
                     return False
         
         return True
@@ -1630,6 +1716,14 @@ class TeamAI(pygame.sprite.Sprite):
                 if wall.rect.colliderect(check_rect):
                     return False
 
+            # AI Avoidance: Check if this point intersects any civilians
+            for civilian in self.game.civilians:
+                if civilian.rect.colliderect(check_rect):
+                    return False
+            for up_civ in self.game.uprising_civilians:
+                if up_civ.rect.colliderect(check_rect):
+                    return False
+
         return True
 
     def find_closest_enemy(self):
@@ -1972,8 +2066,9 @@ class Civilian(pygame.sprite.Sprite):
 
     def take_damage(self, amount, attacker):
         """Take damage and trigger uprising"""
-        self.hp -= amount
-
+        # Universal one-shot kill for all attackers (player or AI)
+        self.hp = 0
+        
         if self.hp <= 0:
             # Show hit marker
             HitMarker(self.game, self.rect.centerx, self.rect.centery)
@@ -2045,6 +2140,12 @@ class UprisingCivilian(pygame.sprite.Sprite):
             for wall in self.game.walls:
                 if wall.rect.colliderect(check_rect):
                     return False
+
+            # AI Avoidance: Check if this point intersects any peaceful civilians
+            for civilian in self.game.civilians:
+                if civilian.rect.colliderect(check_rect):
+                    return False
+            # Omit checking other uprising civilians to allow grouping
 
         return True
 
@@ -2176,8 +2277,8 @@ class UprisingCivilian(pygame.sprite.Sprite):
                 self.rect.y = self.pos.y
 
     def take_damage(self, amount):
-        """Take damage from projectiles"""
-        self.hp -= amount
+        """Take damage from projectiles - one shot kill, no new uprising"""
+        self.hp = 0
 
         if self.hp <= 0:
             # Show hit marker
